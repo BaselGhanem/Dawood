@@ -1,0 +1,24 @@
+import { erp, firebaseState, getSavedFirebaseConfig, saveFirebaseConfig, clearFirebaseConfig, seedData } from './firebase.js';
+import { $, esc, getFormData, toast, downloadFile, parseCSV, exportCSV, setTheme, getTheme } from './utils.js';
+
+export async function renderSettings(root, user) {
+  const settings = await erp.get(`settings`, `company`) || {};
+  const config = getSavedFirebaseConfig() || {};
+  root.innerHTML = `<section class="grid two">
+    <div class="card"><h2>بيانات الشركة</h2><form id="companyForm" class="form-grid two"><label>اسم الشركة<input name="companyName" value="${esc(settings.companyName||`شركة الزيوت والبضاعة`)}"></label><label>رمز الشعار النصي<input name="logoText" maxlength="2" value="${esc(settings.logoText||`ز`)}"></label><label>اللون الرئيسي<input name="primaryColor" type="color" value="${esc(settings.primaryColor||`#099999`)}"></label><label>العملة<input name="currency" value="${esc(settings.currency||`JOD`)}"></label><label>الوضع<select name="theme"><option value="light" ${getTheme()===`light`?`selected`:``}>فاتح</option><option value="dark" ${getTheme()===`dark`?`selected`:``}>داكن</option></select></label><button class="btn primary" type="submit">حفظ بيانات الشركة</button></form></div>
+    <div class="card"><h2>إعداد Firebase</h2><form id="firebaseForm" class="form-grid two"><label>apiKey<input name="apiKey" dir="ltr" value="${esc(config.apiKey||``)}"></label><label>authDomain<input name="authDomain" dir="ltr" value="${esc(config.authDomain||``)}"></label><label>projectId<input name="projectId" dir="ltr" value="${esc(config.projectId||``)}"></label><label>storageBucket<input name="storageBucket" dir="ltr" value="${esc(config.storageBucket||``)}"></label><label>messagingSenderId<input name="messagingSenderId" dir="ltr" value="${esc(config.messagingSenderId||``)}"></label><label>appId<input name="appId" dir="ltr" value="${esc(config.appId||``)}"></label><button class="btn primary" type="submit">حفظ إعداد Firebase</button><button class="btn danger" type="button" id="clearFirebaseBtn">إلغاء إعداد Firebase</button></form><p class="hint">الحالة الحالية: ${firebaseState.mode === `firebase` ? `متصل بـ Firebase` : `تشغيل محلي احتياطي`}</p></div>
+    <div class="card"><h2>التهيئة والنسخ الاحتياطي</h2><div class="actions"><button class="btn amber" id="seedBtn">تهيئة بيانات أساسية</button><button class="btn" id="backupBtn">تصدير نسخة كاملة JSON</button><label class="btn"><input id="importBackupInput" type="file" accept="application/json" hidden>استيراد JSON</label></div><p class="hint">التهيئة تضيف مستخدمين، مستودعات، أصناف، عميل وموردين كنقطة بداية منظمة.</p></div>
+    <div class="card"><h2>استيراد CSV سريع</h2><form id="csvImportForm" class="form-grid two"><label>المجموعة<select name="collectionName">${Object.keys(seedData).map(k=>`<option value="${k}">${k}</option>`).join(``)}</select></label><label>ملف CSV<input name="csvFile" type="file" accept=".csv,text/csv" required></label><button class="btn primary" type="submit">استيراد CSV</button><button type="button" class="btn" id="sampleExportBtn">تصدير قالب الأصناف</button></form></div>
+  </section>`;
+  bindSettings(root);
+}
+function bindSettings(root){
+  $(`#companyForm`,root).addEventListener(`submit`,async e=>{ e.preventDefault(); const d=getFormData(e.target); await erp.add(`settings`,{id:`company`,...d},false).catch(()=>erp.update(`settings`,`company`,d)); document.documentElement.style.setProperty(`--primary`,d.primaryColor); setTheme(d.theme); toast(`تم حفظ بيانات الشركة`); });
+  $(`#firebaseForm`,root).addEventListener(`submit`,e=>{ e.preventDefault(); const d=getFormData(e.target); saveFirebaseConfig(d); toast(`تم حفظ إعداد Firebase. أعد تحميل الصفحة لتفعيل الاتصال.`); });
+  $(`#clearFirebaseBtn`,root).addEventListener(`click`,()=>{ clearFirebaseConfig(); toast(`تم إلغاء إعداد Firebase. سيتم استخدام الوضع المحلي بعد إعادة التحميل.`,`warn`); });
+  $(`#seedBtn`,root).addEventListener(`click`,async()=>{ await erp.batchSeed(false); toast(`تمت تهيئة البيانات الأساسية`); });
+  $(`#backupBtn`,root).addEventListener(`click`,async()=>{ const data=await erp.exportBackup(); downloadFile(`burnt-oils-erp-backup.json`, JSON.stringify(data,null,2), `application/json;charset=utf-8`); });
+  $(`#importBackupInput`,root).addEventListener(`change`,async e=>{ const file=e.target.files[0]; if(!file)return; const data=JSON.parse(await file.text()); await erp.importBackup(data); toast(`تم استيراد النسخة الاحتياطية`); });
+  $(`#sampleExportBtn`,root).addEventListener(`click`,()=>exportCSV(`items-template.csv`, seedData.items));
+  $(`#csvImportForm`,root).addEventListener(`submit`,async e=>{ e.preventDefault(); const d=getFormData(e.target); const file=e.target.csvFile.files[0]; const rows=parseCSV(await file.text()); for(const row of rows) await erp.add(d.collectionName,row); toast(`تم استيراد ${rows.length} سجل`); });
+}
