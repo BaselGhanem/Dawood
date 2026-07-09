@@ -9,7 +9,9 @@ const bootstrapBox = $(`#bootstrapBox`);
 
 hint.textContent = firebaseState.mode === `firebase`
   ? `متصل بـ Firebase الرسمي. استخدم الحسابات الرسمية بعد التهيئة الأولى.`
-  : `يعمل حالياً بوضع محلي احتياطي.`;
+  : firebaseState.mode === `firebase_error`
+    ? `Firebase غير متصل. افتح Console للتفاصيل. لا تضغط التهيئة قبل حل الاتصال.`
+    : `يعمل حالياً بوضع محلي احتياطي.`;
 
 if (bootstrapBox) {
   bootstrapBox.innerHTML = `

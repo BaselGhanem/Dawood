@@ -22,7 +22,8 @@ export const OFFICIAL_BOOTSTRAP_USERS = [
   { fullName:`خضر غانم`, username:`khader`, email:`khader@dawood-c1c03.com`, password:`Khader2026@`, role:`general_manager`, status:`active`, startDate:`2026-07-09`, normalMonthlySalary:0, assignedWarehouseId:`main`, cashBalance:0, cliqBalance:0, advancesBalance:0, salaryBalance:0 }
 ];
 
-export const firebaseState = { mode: `local`, app: null, auth: null, db: null, storage: null, config: null, user: null, profile: null };
+export const firebaseState = { mode: `booting`, app: null, auth: null, db: null, storage: null, config: null, user: null, profile: null, lastError: null };
+let memoryLocalStore = null;
 
 export const seedData = {
   settings: [{ id:`company`, companyName:`نظام داود غانم`, logoText:`د`, primaryColor:`#099999`, currency:`JOD`, fiscalYearStart:`01-01`, theme:`light` }],
@@ -37,17 +38,29 @@ export const seedData = {
 
 function clone(value) { return JSON.parse(JSON.stringify(value)); }
 function readLocalStore() {
-  const raw = localStorage.getItem(LOCAL_KEY);
-  if (!raw) {
-    const fresh = clone(seedData);
-    localStorage.setItem(LOCAL_KEY, JSON.stringify(fresh));
-    return fresh;
+  if (memoryLocalStore) return memoryLocalStore;
+  try {
+    const raw = localStorage.getItem(LOCAL_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      for (const [key, value] of Object.entries(seedData)) if (!Array.isArray(parsed[key])) parsed[key] = clone(value);
+      memoryLocalStore = parsed;
+      return parsed;
+    }
+  } catch (error) {
+    console.warn(`تعذر قراءة التخزين المحلي. سيتم استخدام ذاكرة مؤقتة فقط.`, error);
   }
-  const parsed = JSON.parse(raw);
-  for (const [key, value] of Object.entries(seedData)) if (!Array.isArray(parsed[key])) parsed[key] = clone(value);
-  return parsed;
+  memoryLocalStore = clone(seedData);
+  return memoryLocalStore;
 }
-function writeLocalStore(store) { localStorage.setItem(LOCAL_KEY, JSON.stringify(store)); }
+function writeLocalStore(store) {
+  memoryLocalStore = store;
+  try {
+    localStorage.setItem(LOCAL_KEY, JSON.stringify(store));
+  } catch (error) {
+    console.warn(`تم منع خطأ امتلاء التخزين المحلي. البيانات المحلية مؤقتة فقط.`, error);
+  }
+}
 function serverValue(value) { return value === serverTimestamp ? nowISO() : value; }
 
 export function getSavedFirebaseConfig() {
@@ -63,7 +76,7 @@ async function logAction(type, module, relatedId, oldValue, newValue, notes = ``
   const log = { actionType:type, userId:user.id || user.uid, userName:user.fullName || user.email || `غير معروف`, userRole:user.role || `unknown`, module, relatedDocumentId:relatedId || ``, oldValue: oldValue || null, newValue: newValue || null, notes, userAgent:navigator.userAgent, createdAt:nowISO(), status:`active` };
   if (firebaseState.mode === `firebase` && firebaseState.db) {
     await addDoc(collection(firebaseState.db, `systemLogs`), { ...log, createdAt: serverTimestamp() });
-  } else {
+  } else if (firebaseState.mode === `local`) {
     const store = readLocalStore();
     store.systemLogs.unshift({ id:uid(`log`), ...log });
     writeLocalStore(store);
@@ -73,6 +86,7 @@ async function logAction(type, module, relatedId, oldValue, newValue, notes = ``
 export const erp = {
   async init() {
     if (firebaseState.mode === `firebase` && firebaseState.app && firebaseState.auth && firebaseState.db) return firebaseState.mode;
+    try { localStorage.removeItem(LOCAL_KEY); } catch {}
     const config = getSavedFirebaseConfig();
     if (config?.apiKey && config?.projectId && config?.authDomain) {
       try {
@@ -83,12 +97,16 @@ export const erp = {
         firebaseState.db = getFirestore(firebaseState.app);
         firebaseState.storage = getStorage(firebaseState.app);
         firebaseState.mode = `firebase`;
+        firebaseState.lastError = null;
       } catch (error) {
-        console.warn(`Firebase initialization failed, local mode activated`, error);
-        firebaseState.mode = `local`;
+        console.error(`Firebase initialization failed. Official mode requires Firebase connection.`, error);
+        firebaseState.mode = `firebase_error`;
+        firebaseState.lastError = error;
       }
+    } else {
+      firebaseState.mode = `local`;
+      readLocalStore();
     }
-    if (firebaseState.mode === `local`) readLocalStore();
     return firebaseState.mode;
   },
   async onAuth(callback) {
@@ -114,12 +132,13 @@ export const erp = {
       await logAction(`login`, `auth`, profile.id || authUser.user.uid, null, { email: identifier }, `تسجيل دخول`);
       return profile;
     }
+    if (firebaseState.mode !== `local`) throw new Error(`Firebase غير متصل. افتح Console لمعرفة سبب الخطأ، ولا تستخدم وضع التخزين المحلي في النسخة الرسمية.`);
     const store = readLocalStore();
     const user = store.users.find(u => (normalize(u.email) === normalize(identifier) || normalize(u.username) === normalize(identifier)) && u.localPassword === password && u.status === `active`);
     if (!user) throw new Error(`بيانات الدخول غير صحيحة أو الحساب غير فعال.`);
     user.lastLogin = nowISO();
     firebaseState.profile = user;
-    localStorage.setItem(`burntOilsErpLocalUser`, JSON.stringify(user));
+    try { localStorage.setItem(`burntOilsErpLocalUser`, JSON.stringify(user)); } catch (error) { console.warn(`تعذر حفظ جلسة المستخدم المحلي.`, error); }
     writeLocalStore(store);
     await logAction(`login`, `auth`, user.id, null, { identifier }, `تسجيل دخول محلي`);
     return user;
@@ -226,8 +245,10 @@ export const erp = {
         }
       }
       await batch.commit();
-    } else {
+    } else if (firebaseState.mode === `local`) {
       writeLocalStore(clone(seedData));
+    } else {
+      throw new Error(`Firebase غير متصل. لا يمكن تهيئة النسخة الرسمية.`);
     }
     await logAction(`seed`, `settings`, `seed`, null, { overwrite }, `تهيئة البيانات الأساسية`);
   },
