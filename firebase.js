@@ -1,6 +1,6 @@
-import { initializeApp } from 'https://www.gstatic.com/firebasejs/12.15.0/firebase-app.js';
+import { initializeApp, getApp, getApps } from 'https://www.gstatic.com/firebasejs/12.15.0/firebase-app.js';
 import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged, browserLocalPersistence, setPersistence, sendPasswordResetEmail } from 'https://www.gstatic.com/firebasejs/12.15.0/firebase-auth.js';
-import { getFirestore, collection, doc, getDoc, getDocs, setDoc, addDoc, updateDoc, deleteDoc, query, where, orderBy, serverTimestamp, enableIndexedDbPersistence, writeBatch, limit } from 'https://www.gstatic.com/firebasejs/12.15.0/firebase-firestore.js';
+import { getFirestore, collection, doc, getDoc, getDocs, setDoc, addDoc, updateDoc, deleteDoc, query, where, orderBy, serverTimestamp, writeBatch, limit } from 'https://www.gstatic.com/firebasejs/12.15.0/firebase-firestore.js';
 import { getStorage } from 'https://www.gstatic.com/firebasejs/12.15.0/firebase-storage.js';
 import { uid, nowISO, normalize } from './utils.js';
 
@@ -72,17 +72,17 @@ async function logAction(type, module, relatedId, oldValue, newValue, notes = ``
 
 export const erp = {
   async init() {
+    if (firebaseState.mode === `firebase` && firebaseState.app && firebaseState.auth && firebaseState.db) return firebaseState.mode;
     const config = getSavedFirebaseConfig();
     if (config?.apiKey && config?.projectId && config?.authDomain) {
       try {
         firebaseState.config = config;
-        firebaseState.app = initializeApp(config);
+        firebaseState.app = getApps().length ? getApp() : initializeApp(config);
         firebaseState.auth = getAuth(firebaseState.app);
-        await setPersistence(firebaseState.auth, browserLocalPersistence);
+        try { await setPersistence(firebaseState.auth, browserLocalPersistence); } catch (persistenceError) { console.warn(`Auth persistence already initialized; continuing with Firebase mode.`, persistenceError); }
         firebaseState.db = getFirestore(firebaseState.app);
         firebaseState.storage = getStorage(firebaseState.app);
         firebaseState.mode = `firebase`;
-        enableIndexedDbPersistence(firebaseState.db).catch(() => {});
       } catch (error) {
         console.warn(`Firebase initialization failed, local mode activated`, error);
         firebaseState.mode = `local`;
