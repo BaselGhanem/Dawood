@@ -64,7 +64,7 @@ export function badge(value, tone = `teal`) {
 }
 export function statusBadge(status) {
   const map = {
-    active: [`فعال`, `green`], inactive: [`غير فعال`, `red`], draft: [`مسودة`, `blue`], confirmed: [`معتمد`, `green`], pending: [`بانتظار التأكيد`, `amber`], rejected: [`مرفوض`, `red`], paid: [`مدفوع`, `green`], partial: [`مدفوع جزئياً`, `amber`], open: [`مفتوح`, `blue`], overdue: [`متأخر`, `red`], deleted: [`محذوف`, `red`]
+    active: [`فعال`, `green`], inactive: [`غير فعال`, `red`], draft: [`مسودة`, `blue`], confirmed: [`معتمد`, `green`], pending: [`بانتظار التأكيد`, `amber`], rejected: [`مرفوض`, `red`], paid: [`مدفوع`, `green`], partial: [`مدفوع جزئياً`, `amber`], open: [`مفتوح`, `blue`], overdue: [`متأخر`, `red`], deleted: [`محذوف`, `red`], approved: [`معتمد`, `green`], accepted: [`مقبول`, `green`], awaiting_receiver: [`بانتظار موافقة المستلم`, `amber`], returned: [`راجع`, `amber`]
   };
   const [text, tone] = map[status] || [status || `غير محدد`, `teal`];
   return badge(text, tone);
@@ -103,6 +103,58 @@ export function exportCSV(filename, rows) {
   const csv = [headers.join(`,`), ...rows.map(row => headers.map(h => `"${String(row[h] ?? ``).replaceAll(`"`, `""`)}"`).join(`,`))].join(`\n`);
   downloadFile(filename, `\ufeff${csv}`, `text/csv;charset=utf-8`);
 }
+
+export function exportExcel(filename, rows) {
+  if (!rows.length) {
+    toast(`لا توجد بيانات للتصدير`, `warn`);
+    return;
+  }
+  const headers = [...new Set(rows.flatMap(row => Object.keys(row)))];
+  const html = `<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8"></head><body><table border="1"><thead><tr>${headers.map(h => `<th>${esc(h)}</th>`).join(``)}</tr></thead><tbody>${rows.map(row => `<tr>${headers.map(h => `<td>${esc(row[h] ?? ``)}</td>`).join(``)}</tr>`).join(``)}</tbody></table></body></html>`;
+  downloadFile(filename.endsWith(`.xls`) ? filename : `${filename}.xls`, `\ufeff${html}`, `application/vnd.ms-excel;charset=utf-8`);
+}
+export function tableToRows(tableEl) {
+  const headers = [...tableEl.querySelectorAll(`thead th`)].map(th => th.textContent.trim());
+  return [...tableEl.querySelectorAll(`tbody tr`)].map(tr => Object.fromEntries([...tr.children].map((td, i) => [headers[i] || `عمود ${i + 1}`, td.textContent.trim()])));
+}
+export function exportVisibleTablesExcel(filename = `page-export.xls`, root = document) {
+  const tables = [...root.querySelectorAll(`table`)].filter(t => t.offsetParent !== null);
+  const rows = tables.flatMap((t, index) => tableToRows(t).map(row => ({ جدول: index + 1, ...row })));
+  exportExcel(filename, rows);
+}
+export function printVisibleTablesPdf(title = `تقرير`, root = document) {
+  const content = [...root.querySelectorAll(`table`)].filter(t => t.offsetParent !== null).map(t => t.outerHTML).join(`<br><br>`);
+  if (!content) return toast(`لا توجد جداول ظاهرة للطباعة`, `warn`);
+  const win = window.open(``, `_blank`);
+  win.document.write(`<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><title>${esc(title)}</title><style>body{font-family:Arial,Tahoma,sans-serif;padding:24px;direction:rtl}h1{font-size:20px;margin:0 0 18px}table{border-collapse:collapse;width:100%;margin-bottom:18px}th,td{border:1px solid #ddd;padding:8px;font-size:12px;text-align:right}th{background:#f3f6f8}@media print{button{display:none}}</style></head><body><h1>${esc(title)}</h1>${content}</body></html>`);
+  win.document.close();
+  win.focus();
+  win.print();
+}
+export function bindSmartFilters(root, sourceRows, config, render) {
+  const getFilteredRows = (excludeKey = ``) => sourceRows.filter(row => Object.entries(config).every(([key, cfg]) => {
+    if (key === excludeKey) return true;
+    const el = root.querySelector(cfg.selector);
+    const value = el?.value || ``;
+    if (!value) return true;
+    return String(cfg.get(row) ?? ``) === value;
+  }));
+  const refreshOptions = () => {
+    Object.entries(config).forEach(([key, cfg]) => {
+      const el = root.querySelector(cfg.selector);
+      if (!el || el.tagName !== `SELECT`) return;
+      const current = el.value;
+      const rows = getFilteredRows(key);
+      const values = [...new Set(rows.map(cfg.get).filter(v => v !== undefined && v !== null && String(v) !== ``))];
+      el.innerHTML = `<option value="">الكل</option>${values.map(value => `<option value="${esc(value)}" ${String(value) === current ? `selected` : ``}>${esc(cfg.label ? cfg.label(value) : value)}</option>`).join(``)}`;
+      if (current && !values.map(String).includes(String(current))) el.value = ``;
+    });
+    render(getFilteredRows());
+  };
+  Object.values(config).forEach(cfg => root.querySelector(cfg.selector)?.addEventListener(`change`, refreshOptions));
+  refreshOptions();
+}
+
 export function parseCSV(text) {
   const lines = text.replace(/^\ufeff/, ``).split(/\r?\n/).filter(Boolean);
   const headers = splitCsvLine(lines.shift() || ``);

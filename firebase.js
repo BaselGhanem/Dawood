@@ -5,37 +5,33 @@ import { getStorage } from 'https://www.gstatic.com/firebasejs/12.15.0/firebase-
 import { uid, nowISO, normalize } from './utils.js';
 
 const CONFIG_KEY = `burntOilsErpFirebaseConfig`;
-const LOCAL_KEY = `burntOilsErpLocalStoreV1`;
+const LOCAL_KEY = `burntOilsErpLocalStoreOfficialV2`;
+
+export const DEFAULT_FIREBASE_CONFIG = {
+  apiKey: `AIzaSyCsNsMyAfolMeDGXgFbVD4iA78WTAYJkrU`,
+  authDomain: `dawood-c1c03.firebaseapp.com`,
+  projectId: `dawood-c1c03`,
+  storageBucket: `dawood-c1c03.firebasestorage.app`,
+  messagingSenderId: `64130282055`,
+  appId: `1:64130282055:web:ba4ab8fb879db68031b762`
+};
+
+export const OFFICIAL_BOOTSTRAP_USERS = [
+  { fullName:`داود غانم`, username:`dawood`, email:`dawood@dawood-c1c03.com`, password:`Dawood2026@`, role:`dawood`, status:`active`, startDate:`2026-07-09`, normalMonthlySalary:0, assignedWarehouseId:`main`, cashBalance:0, cliqBalance:0, advancesBalance:0, salaryBalance:0 },
+  { fullName:`معتصم غانم`, username:`moatasem`, email:`moatasem@dawood-c1c03.com`, password:`Moatasem2026@`, role:`moatasem`, status:`active`, startDate:`2026-07-09`, normalMonthlySalary:0, assignedWarehouseId:`main`, cashBalance:0, cliqBalance:0, advancesBalance:0, salaryBalance:0 },
+  { fullName:`خضر غانم`, username:`khader`, email:`khader@dawood-c1c03.com`, password:`Khader2026@`, role:`general_manager`, status:`active`, startDate:`2026-07-09`, normalMonthlySalary:0, assignedWarehouseId:`main`, cashBalance:0, cliqBalance:0, advancesBalance:0, salaryBalance:0 }
+];
+
 export const firebaseState = { mode: `local`, app: null, auth: null, db: null, storage: null, config: null, user: null, profile: null };
 
 export const seedData = {
-  settings: [{ id:`company`, companyName:`شركة الزيوت والبضاعة`, logoText:`ز`, primaryColor:`#099999`, currency:`JOD`, fiscalYearStart:`01-01`, theme:`light` }],
-  users: [
-    { id:`local-admin`, fullName:`مدير النظام`, username:`admin`, email:`admin@erp.local`, localPassword:`Admin2026@`, role:`admin`, status:`active`, startDate:`2026-01-01`, normalMonthlySalary:900, assignedWarehouseId:`main`, cashBalance:0, cliqBalance:0, advancesBalance:0, createdBy:`system`, createdAt:nowISO(), lastLogin:null },
-    { id:`u-dawood`, fullName:`داود`, username:`dawood`, email:`dawood@erp.local`, localPassword:`Dawood2026@`, role:`dawood`, status:`active`, startDate:`2026-01-01`, normalMonthlySalary:700, assignedWarehouseId:`main`, cashBalance:0, cliqBalance:0, advancesBalance:0, createdBy:`system`, createdAt:nowISO() },
-    { id:`u-moatasem`, fullName:`معتصم`, username:`moatasem`, email:`moatasem@erp.local`, localPassword:`Moatasem2026@`, role:`moatasem`, status:`active`, startDate:`2026-01-01`, normalMonthlySalary:700, assignedWarehouseId:`main`, cashBalance:0, cliqBalance:0, advancesBalance:0, createdBy:`system`, createdAt:nowISO() },
-    { id:`u-rep-1`, fullName:`مندوب تجريبي`, username:`rep1`, email:`rep1@erp.local`, localPassword:`Rep2026@`, role:`sales_rep`, status:`active`, startDate:`2026-02-01`, normalMonthlySalary:500, assignedWarehouseId:`vehicle-rep-1`, cashBalance:0, cliqBalance:0, advancesBalance:0, createdBy:`system`, createdAt:nowISO() }
-  ],
-  warehouses: [
-    { id:`main`, warehouseCode:`MAIN`, warehouseName:`المستودع الرئيسي`, type:`main`, status:`active`, managerId:`local-admin`, createdAt:nowISO(), createdBy:`system` },
-    { id:`vehicle-rep-1`, warehouseCode:`CAR-001`, warehouseName:`سيارة المندوب التجريبي`, type:`vehicle`, status:`active`, repId:`u-rep-1`, createdAt:nowISO(), createdBy:`system` }
-  ],
-  items: [
-    { id:`item-burnt-oil`, itemCode:`RM-001`, itemName:`زيت محروق خام`, category:`raw_material`, unit:`لتر`, costPrice:0.18, standardSellingPrice:0.25, shortagePrice:0.25, minimumStock:150, supplierId:`sup-1`, status:`active`, stock:{ main:1000, 'vehicle-rep-1':0 }, createdAt:nowISO(), createdBy:`system` },
-    { id:`item-refined-oil`, itemCode:`FG-001`, itemName:`زيت معالج للبيع`, category:`manufactured`, unit:`لتر`, costPrice:0.42, standardSellingPrice:0.75, shortagePrice:0.75, minimumStock:100, supplierId:``, status:`active`, stock:{ main:220, 'vehicle-rep-1':35 }, createdAt:nowISO(), createdBy:`system` },
-    { id:`item-filter`, itemCode:`TO-001`, itemName:`فلتر سيارة`, category:`tools`, unit:`قطعة`, costPrice:3.5, standardSellingPrice:4, shortagePrice:4, minimumStock:10, supplierId:`sup-2`, status:`active`, stock:{ main:30, 'vehicle-rep-1':2 }, createdAt:nowISO(), createdBy:`system` },
-    { id:`item-ready`, itemCode:`RG-001`, itemName:`منظف صناعي جاهز`, category:`ready_goods`, unit:`عبوة`, costPrice:1.1, standardSellingPrice:1.8, shortagePrice:1.8, minimumStock:30, supplierId:`sup-2`, status:`active`, stock:{ main:90, 'vehicle-rep-1':8 }, createdAt:nowISO(), createdBy:`system` }
-  ],
-  manufacturingRecipes: [
-    { id:`recipe-refined-oil`, recipeName:`إنتاج زيت معالج`, finalItemId:`item-refined-oil`, outputQuantity:100, wastePercent:3, laborCost:8, overheadCost:6, rawMaterials:[{ itemId:`item-burnt-oil`, quantity:120 }], status:`active`, notes:`وصفة تشغيلية تجريبية`, createdAt:nowISO(), createdBy:`system` }
-  ],
-  customers: [
-    { id:`cust-1`, customerName:`عميل تجريبي`, phone:`0790000000`, area:`عمّان`, responsibleRepId:`u-rep-1`, openingBalance:0, currentBalance:0, status:`active`, createdAt:nowISO(), createdBy:`system` }
-  ],
-  suppliers: [
-    { id:`sup-1`, supplierName:`مورد الزيوت الخام`, phone:`0780000000`, address:`عمّان`, openingBalance:0, currentBalance:0, status:`active`, createdAt:nowISO(), createdBy:`system` },
-    { id:`sup-2`, supplierName:`مورد اللوازم`, phone:`0770000000`, address:`الزرقاء`, openingBalance:0, currentBalance:0, status:`active`, createdAt:nowISO(), createdBy:`system` }
-  ],
+  settings: [{ id:`company`, companyName:`نظام داود غانم`, logoText:`د`, primaryColor:`#099999`, currency:`JOD`, fiscalYearStart:`01-01`, theme:`light` }],
+  users: OFFICIAL_BOOTSTRAP_USERS.map(u => ({ id:`u-${u.username}`, ...u, localPassword:u.password, password:undefined, createdBy:`system`, createdAt:nowISO(), lastLogin:null })).map(({ password, ...u }) => u),
+  warehouses: [{ id:`main`, warehouseCode:`MAIN`, warehouseName:`المستودع الرئيسي`, type:`main`, status:`active`, managerId:`u-dawood`, createdAt:nowISO(), createdBy:`system` }],
+  items: [],
+  manufacturingRecipes: [],
+  customers: [],
+  suppliers: [],
   inventoryMovements: [], productionOrders: [], salesInvoices: [], customerDebts: [], collections: [], purchaseInvoices: [], supplierDebts: [], cashDeliveries: [], internalTransfers: [], employeeAdvances: [], salaries: [], vehicleExpenses: [], stockCounts: [], systemLogs: [], notifications: []
 };
 
@@ -55,7 +51,7 @@ function writeLocalStore(store) { localStorage.setItem(LOCAL_KEY, JSON.stringify
 function serverValue(value) { return value === serverTimestamp ? nowISO() : value; }
 
 export function getSavedFirebaseConfig() {
-  try { return JSON.parse(localStorage.getItem(CONFIG_KEY) || `null`); } catch { return null; }
+  try { return JSON.parse(localStorage.getItem(CONFIG_KEY) || `null`) || DEFAULT_FIREBASE_CONFIG; } catch { return DEFAULT_FIREBASE_CONFIG; }
 }
 export function saveFirebaseConfig(config) {
   localStorage.setItem(CONFIG_KEY, JSON.stringify(config));
@@ -223,6 +219,7 @@ export const erp = {
     if (firebaseState.mode === `firebase` && firebaseState.db) {
       const batch = writeBatch(firebaseState.db);
       for (const [collectionName, rows] of Object.entries(seedData)) {
+        if (collectionName === `users`) continue;
         for (const row of rows) {
           const ref = doc(firebaseState.db, collectionName, row.id || uid(collectionName));
           batch.set(ref, { ...row, createdAt: serverTimestamp(), updatedAt: serverTimestamp() }, { merge: !overwrite });
@@ -276,6 +273,47 @@ export const erp = {
     return after;
   }
 };
+
+
+export async function bootstrapOfficialFirebaseUsers() {
+  await erp.init();
+  if (firebaseState.mode !== `firebase`) throw new Error(`Firebase غير متصل. تحقق من الإعدادات أولاً.`);
+  let primaryProfile = null;
+  for (const [index, official] of OFFICIAL_BOOTSTRAP_USERS.entries()) {
+    try {
+      await createAuthUserViaRest(official.email, official.password);
+    } catch (error) {
+      if (!String(error.message || ``).includes(`EMAIL_EXISTS`)) throw error;
+    }
+    const authUser = await signInWithEmailAndPassword(firebaseState.auth, official.email, official.password);
+    const uidValue = authUser.user.uid;
+    const profile = {
+      fullName: official.fullName,
+      username: official.username,
+      email: official.email,
+      role: official.role,
+      status: `active`,
+      startDate: official.startDate,
+      normalMonthlySalary: Number(official.normalMonthlySalary || 0),
+      assignedWarehouseId: official.assignedWarehouseId || `main`,
+      cashBalance: Number(official.cashBalance || 0),
+      cliqBalance: Number(official.cliqBalance || 0),
+      advancesBalance: Number(official.advancesBalance || 0),
+      salaryBalance: Number(official.salaryBalance || 0),
+      createdBy: `bootstrap`,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp()
+    };
+    await setDoc(doc(firebaseState.db, `users`, uidValue), profile, { merge:true });
+    if (index === 0) primaryProfile = { id: uidValue, ...profile };
+  }
+  await signInWithEmailAndPassword(firebaseState.auth, OFFICIAL_BOOTSTRAP_USERS[0].email, OFFICIAL_BOOTSTRAP_USERS[0].password);
+  firebaseState.profile = primaryProfile;
+  await setDoc(doc(firebaseState.db, `settings`, `company`), { ...seedData.settings[0], updatedAt: serverTimestamp(), createdAt: serverTimestamp() }, { merge:true });
+  await setDoc(doc(firebaseState.db, `warehouses`, `main`), { ...seedData.warehouses[0], updatedAt: serverTimestamp(), createdAt: serverTimestamp() }, { merge:true });
+  await logAction(`bootstrap`, `auth`, `official-users`, null, { users: OFFICIAL_BOOTSTRAP_USERS.map(u => u.username) }, `تهيئة المستخدمين الرسميين بدون بيانات تجريبية`);
+  return OFFICIAL_BOOTSTRAP_USERS;
+}
 
 export async function createAuthUserViaRest(email, password) {
   if (!firebaseState.config?.apiKey) throw new Error(`إعداد Firebase غير مكتمل.`);

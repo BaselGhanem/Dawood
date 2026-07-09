@@ -1,5 +1,5 @@
 import { erp } from './firebase.js';
-import { $, esc, money, qty, number, uid, todayISO, getFormData, toast, confirmModal, table, statusBadge, renderTabs, attachTabs, exportCSV } from './utils.js';
+import { $, esc, money, qty, number, uid, todayISO, getFormData, toast, confirmModal, table, statusBadge, renderTabs, attachTabs, exportExcel } from './utils.js';
 import { can } from './permissions.js';
 
 const cats = { raw_material:`مواد خام`, manufactured:`منتجات مصنّعة`, ready_goods:`بضاعة جاهزة`, tools:`عدد وأدوات`, maintenance:`صيانة`, miscellaneous:`متفرقات` };
@@ -62,7 +62,7 @@ function bindStock(root, user) {
     if (e.target.closest(`#newItemBtn`)) showItemModal();
     const edit = e.target.closest(`[data-edit-item]`); if (edit) showItemModal(await erp.get(`items`, edit.dataset.editItem));
     const del = e.target.closest(`[data-del-item]`); if (del) confirmModal(`سيتم حذف الصنف حذفاً ناعماً مع حفظ السجل.`, async()=>{ await erp.softDelete(`items`, del.dataset.delItem); toast(`تم حذف الصنف`); renderWarehouse(root, user); }, `حذف`);
-    if (e.target.closest(`#exportStockBtn`)) exportCSV(`stock.csv`, await erp.list(`items`));
+    if (e.target.closest(`#exportStockBtn`)) exportExcel(`stock.xls`, await erp.list(`items`));
     if (e.target.closest(`#newWarehouseBtn`)) showWarehouseModal(root, user);
   });
   async function showItemModal(item={}) {

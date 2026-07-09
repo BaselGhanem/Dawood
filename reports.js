@@ -1,5 +1,5 @@
 import { erp } from './firebase.js';
-import { $, esc, money, qty, number, sum, table, statusBadge, exportCSV, todayISO } from './utils.js';
+import { $, esc, money, qty, number, sum, table, statusBadge, exportExcel, todayISO } from './utils.js';
 
 const reportCollections = {
   inventory:`items`, movements:`inventoryMovements`, manufacturing:`productionOrders`, sales:`salesInvoices`, receivables:`customerDebts`, purchases:`purchaseInvoices`, payables:`supplierDebts`, cashbox:`cashDeliveries`, transfers:`internalTransfers`, salaries:`salaries`, advances:`employeeAdvances`, expenses:`vehicleExpenses`, shortages:`stockCounts`, logs:`systemLogs`
@@ -13,7 +13,7 @@ export async function renderReports(root, user) {
       <label>من تاريخ<input id="fromDate" type="date" value="${todayISO().slice(0,8)}01"></label>
       <label>إلى تاريخ<input id="toDate" type="date" value="${todayISO()}"></label>
       <label>بحث<input id="reportSearch"></label>
-      <label>تصدير<button class="btn" id="exportReportBtn" type="button">Excel / CSV</button></label>
+      <label>تصدير<button class="btn" id="exportReportBtn" type="button">Excel</button></label>
     </div>
     <div id="reportKpis" class="grid four"></div>
     <div id="reportResult" style="margin-top:14px"></div>
@@ -35,7 +35,7 @@ export async function renderReports(root, user) {
     $(`#reportResult`).innerHTML = renderReport(type, rows, { users, warehouses, items, customers, suppliers });
   };
   root.addEventListener(`input`, e => { if([`reportType`,`fromDate`,`toDate`,`reportSearch`].includes(e.target.id)) refresh(); });
-  $(`#exportReportBtn`, root).addEventListener(`click`, () => exportCSV(`${$(`#reportType`).value}.csv`, state.rows));
+  $(`#exportReportBtn`, root).addEventListener(`click`, () => exportExcel(`${$(`#reportType`).value}.xls`, state.rows));
   await refresh();
 }
 function kpis(type, rows){
