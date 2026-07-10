@@ -32,6 +32,7 @@ async function renderShell(user, activePage) {
   document.getElementById(`app`).className = ``;
   document.getElementById(`app`).innerHTML = `
     <div class="layout ${isViewOnly(user) ? `view-only-shell` : ``}">
+      <div class="shell-overlay" id="shellOverlay"></div>
       <aside class="sidebar" id="sidebar">
         <div class="side-head"><div class="side-logo">${esc(await getLogoText())}</div><div><strong>${esc(await getCompanyName())}</strong><br><small>${esc(roleLabel(user.role))}</small></div></div>
         <nav class="nav">${allowedNav.map(([key,label,ico]) => `<a class="${key === activePage ? `active` : ``}" href="${key}.html"><span><span class="ico">${ico}</span> ${esc(label)}</span><span>‹</span></a>`).join(``)}</nav>
@@ -43,19 +44,24 @@ async function renderShell(user, activePage) {
       </aside>
       <main class="page">
         <header class="topbar">
-          <div><button class="btn mobile-menu" id="menuBtn">القائمة</button><h1>${esc(title)}</h1><p>${esc(subtitle)}</p></div>
+          <div class="topbar-main"><button class="btn mobile-menu" id="menuBtn" aria-label="فتح القائمة">☰</button><div class="top-title"><h1>${esc(title)}</h1><p>${esc(subtitle)}</p></div></div>
           <div class="top-actions">
             <button class="btn" id="pageExcelBtn">Excel</button>
             <button class="btn" id="pagePdfBtn">PDF</button>
-            <span class="badge teal">${esc(user.fullName || user.email)}</span>
+            <span class="badge teal user-chip">${esc(user.fullName || user.email)}</span>
             <button class="btn ghost" id="quickSearchBtn">بحث سريع</button>
           </div>
         </header>
-        <section id="pageContent"></section>
+        <section id="pageContent" class="content-stack"></section>
       </main>
     </div>`;
 
-  $(`#menuBtn`)?.addEventListener(`click`, () => $(`#sidebar`).classList.toggle(`open`));
+  const sidebar = $(`#sidebar`);
+  const overlay = $(`#shellOverlay`);
+  const setMenu = open => { sidebar.classList.toggle(`open`, open); overlay.classList.toggle(`open`, open); };
+  $(`#menuBtn`)?.addEventListener(`click`, () => setMenu(!sidebar.classList.contains(`open`)));
+  overlay?.addEventListener(`click`, () => setMenu(false));
+  $$(`.nav a`, sidebar).forEach(link => link.addEventListener(`click`, () => setMenu(false)));
   $(`#logoutBtn`).addEventListener(`click`, async () => { await erp.logout(); location.href = `login.html`; });
   $(`#themeBtn`).addEventListener(`click`, () => setTheme(document.body.classList.contains(`dark`) ? `light` : `dark`));
   $(`#quickSearchBtn`).addEventListener(`click`, quickSearch);

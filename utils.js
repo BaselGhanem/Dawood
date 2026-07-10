@@ -40,7 +40,7 @@ export function modal(title, bodyHTML, actions = []) {
     <div class="modal" role="dialog" aria-modal="true">
       <div class="modal-head"><h3>${esc(title)}</h3><button class="btn ghost" data-close>إغلاق</button></div>
       <div class="modal-body">${bodyHTML}</div>
-      ${buttons ? `<div class="actions" style="margin-top:14px">${buttons}</div>` : ``}
+      ${buttons ? `<div class="actions modal-actions">${buttons}</div>` : ``}
     </div>`;
   document.body.appendChild(wrap);
   wrap.addEventListener(`click`, event => {
@@ -71,7 +71,12 @@ export function statusBadge(status) {
 }
 export function table(headers, rows, emptyText = `لا توجد بيانات`) {
   if (!rows.length) return `<div class="empty">${esc(emptyText)}</div>`;
-  return `<div class="table-wrap"><table><thead><tr>${headers.map(h => `<th>${esc(h.label)}</th>`).join(``)}</tr></thead><tbody>${rows.map(row => `<tr>${headers.map(h => `<td>${typeof h.value === `function` ? h.value(row) : esc(row[h.value])}</td>`).join(``)}</tr>`).join(``)}</tbody></table></div>`;
+  const head = headers.map(h => `<th>${esc(h.label)}</th>`).join(``);
+  const body = rows.map(row => `<tr>${headers.map(h => {
+    const value = typeof h.value === `function` ? h.value(row) : esc(row[h.value]);
+    return `<td data-label="${esc(h.label)}">${value}</td>`;
+  }).join(``)}</tr>`).join(``);
+  return `<div class="table-wrap"><table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
 }
 export function renderTabs(tabs, activeId) {
   return `<div class="tabs">${tabs.map(tab => `<button class="btn tab ${tab.id === activeId ? `active` : ``}" data-tab="${esc(tab.id)}">${esc(tab.label)}</button>`).join(``)}</div>`;
