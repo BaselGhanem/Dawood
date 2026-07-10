@@ -16,10 +16,16 @@ export const DEFAULT_FIREBASE_CONFIG = {
   appId: `1:64130282055:web:ba4ab8fb879db68031b762`
 };
 
-export const OFFICIAL_BOOTSTRAP_USERS = [
-  { fullName:`داود غانم`, username:`dawood`, email:`dawood@dawood-c1c03.com`, password:`Dawood2026@`, role:`dawood`, status:`active`, startDate:`2026-07-09`, normalMonthlySalary:0, assignedWarehouseId:`main`, cashBalance:0, cliqBalance:0, advancesBalance:0, salaryBalance:0 },
-  { fullName:`معتصم غانم`, username:`moatasem`, email:`moatasem@dawood-c1c03.com`, password:`Moatasem2026@`, role:`moatasem`, status:`active`, startDate:`2026-07-09`, normalMonthlySalary:0, assignedWarehouseId:`main`, cashBalance:0, cliqBalance:0, advancesBalance:0, salaryBalance:0 },
-  { fullName:`خضر غانم`, username:`khader`, email:`khader@dawood-c1c03.com`, password:`Khader2026@`, role:`general_manager`, status:`active`, startDate:`2026-07-09`, normalMonthlySalary:0, assignedWarehouseId:`main`, cashBalance:0, cliqBalance:0, advancesBalance:0, salaryBalance:0 }
+export const OFFICIAL_LOGIN_ALIASES = [
+  { username:`dawood`, email:`dawood@dawood-c1c03.com` },
+  { username:`moatasem`, email:`moatasem@dawood-c1c03.com` },
+  { username:`khader`, email:`khader@dawood-c1c03.com` }
+];
+
+export const OFFICIAL_BASE_USERS = [
+  { id:`u-dawood`, fullName:`داود غانم`, username:`dawood`, email:`dawood@dawood-c1c03.com`, role:`dawood`, status:`active`, startDate:`2026-07-09`, normalMonthlySalary:0, assignedWarehouseId:`main`, cashBalance:0, cliqBalance:0, advancesBalance:0, salaryBalance:0 },
+  { id:`u-moatasem`, fullName:`معتصم غانم`, username:`moatasem`, email:`moatasem@dawood-c1c03.com`, role:`moatasem`, status:`active`, startDate:`2026-07-09`, normalMonthlySalary:0, assignedWarehouseId:`main`, cashBalance:0, cliqBalance:0, advancesBalance:0, salaryBalance:0 },
+  { id:`u-khader`, fullName:`خضر غانم`, username:`khader`, email:`khader@dawood-c1c03.com`, role:`general_manager`, status:`active`, startDate:`2026-07-09`, normalMonthlySalary:0, assignedWarehouseId:`main`, cashBalance:0, cliqBalance:0, advancesBalance:0, salaryBalance:0 }
 ];
 
 export const firebaseState = { mode: `booting`, app: null, auth: null, db: null, storage: null, config: null, user: null, profile: null, lastError: null };
@@ -27,13 +33,13 @@ let memoryLocalStore = null;
 
 export const seedData = {
   settings: [{ id:`company`, companyName:`نظام داود غانم`, logoText:`د`, primaryColor:`#099999`, currency:`JOD`, fiscalYearStart:`01-01`, theme:`light` }],
-  users: OFFICIAL_BOOTSTRAP_USERS.map(u => ({ id:`u-${u.username}`, ...u, localPassword:u.password, password:undefined, createdBy:`system`, createdAt:nowISO(), lastLogin:null })).map(({ password, ...u }) => u),
+  users: OFFICIAL_BASE_USERS.map(u => ({ ...u, createdBy:`system`, createdAt:nowISO(), lastLogin:null })),
   warehouses: [{ id:`main`, warehouseCode:`MAIN`, warehouseName:`المستودع الرئيسي`, type:`main`, status:`active`, managerId:`u-dawood`, createdAt:nowISO(), createdBy:`system` }],
   items: [],
   manufacturingRecipes: [],
   customers: [],
   suppliers: [],
-  inventoryMovements: [], productionOrders: [], salesInvoices: [], customerDebts: [], collections: [], purchaseInvoices: [], supplierDebts: [], cashDeliveries: [], internalTransfers: [], employeeAdvances: [], salaries: [], vehicleExpenses: [], stockCounts: [], systemLogs: [], notifications: []
+  inventoryMovements: [], productionOrders: [], salesInvoices: [], customerDebts: [], collections: [], purchaseInvoices: [], supplierDebts: [], cashDeliveries: [], internalTransfers: [], employeeAdvances: [], salaries: [], vehicleExpenses: [], stockCounts: [], systemLogs: [], notifications: [], loginAliases: []
 };
 
 function clone(value) { return JSON.parse(JSON.stringify(value)); }
@@ -62,6 +68,8 @@ function writeLocalStore(store) {
   }
 }
 function serverValue(value) { return value === serverTimestamp ? nowISO() : value; }
+export function usernameKey(value) { return normalize(value || ``).replaceAll(`/`, `_`).replaceAll(`\\`, `_`).replaceAll(`#`, `_`).replaceAll(`?`, `_`).replaceAll(`[`, `_`).replaceAll(`]`, `_`); }
+function looksLikeEmail(value) { return String(value || ``).includes(`@`); }
 
 export function getSavedFirebaseConfig() {
   try { return JSON.parse(localStorage.getItem(CONFIG_KEY) || `null`) || DEFAULT_FIREBASE_CONFIG; } catch { return DEFAULT_FIREBASE_CONFIG; }
@@ -124,23 +132,24 @@ export const erp = {
   },
   async login(identifier, password) {
     await this.init();
+    const resolvedIdentifier = await this.resolveLoginIdentifier(identifier);
     if (firebaseState.mode === `firebase`) {
-      const authUser = await signInWithEmailAndPassword(firebaseState.auth, identifier, password);
+      const authUser = await signInWithEmailAndPassword(firebaseState.auth, resolvedIdentifier, password);
       const profile = await this.getProfile(authUser.user.uid, authUser.user.email);
       if (!profile || profile.status === `inactive`) throw new Error(`الحساب غير فعال أو غير معرّف في جدول المستخدمين.`);
       await this.update(`users`, profile.id || authUser.user.uid, { lastLogin: nowISO() }, false);
-      await logAction(`login`, `auth`, profile.id || authUser.user.uid, null, { email: identifier }, `تسجيل دخول`);
+      await logAction(`login`, `auth`, profile.id || authUser.user.uid, null, { email: resolvedIdentifier }, `تسجيل دخول`);
       return profile;
     }
     if (firebaseState.mode !== `local`) throw new Error(`Firebase غير متصل. افتح Console لمعرفة سبب الخطأ، ولا تستخدم وضع التخزين المحلي في النسخة الرسمية.`);
     const store = readLocalStore();
-    const user = store.users.find(u => (normalize(u.email) === normalize(identifier) || normalize(u.username) === normalize(identifier)) && u.localPassword === password && u.status === `active`);
+    const user = store.users.find(u => (normalize(u.email) === normalize(resolvedIdentifier) || normalize(u.username) === normalize(identifier)) && u.localPassword === password && u.status === `active`);
     if (!user) throw new Error(`بيانات الدخول غير صحيحة أو الحساب غير فعال.`);
     user.lastLogin = nowISO();
     firebaseState.profile = user;
     try { localStorage.setItem(`burntOilsErpLocalUser`, JSON.stringify(user)); } catch (error) { console.warn(`تعذر حفظ جلسة المستخدم المحلي.`, error); }
     writeLocalStore(store);
-    await logAction(`login`, `auth`, user.id, null, { identifier }, `تسجيل دخول محلي`);
+    await logAction(`login`, `auth`, user.id, null, { identifier: resolvedIdentifier }, `تسجيل دخول محلي`);
     return user;
   },
   async logout() {
@@ -152,6 +161,26 @@ export const erp = {
   async resetPassword(email) {
     if (firebaseState.mode !== `firebase`) throw new Error(`استعادة كلمة المرور متاحة بعد إعداد Firebase فقط.`);
     await sendPasswordResetEmail(firebaseState.auth, email);
+  },
+
+  async resolveLoginIdentifier(identifier) {
+    await this.init();
+    const raw = String(identifier || ``).trim();
+    if (!raw || looksLikeEmail(raw)) return raw;
+    const official = OFFICIAL_LOGIN_ALIASES.find(u => normalize(u.username) === normalize(raw));
+    if (official?.email) return official.email;
+    if (firebaseState.mode === `firebase` && firebaseState.db) {
+      const key = usernameKey(raw);
+      const snap = await getDoc(doc(firebaseState.db, `loginAliases`, key));
+      if (snap.exists() && snap.data()?.email) return snap.data().email;
+    }
+    return raw;
+  },
+  async setLoginAlias(username, email, userId) {
+    if (!username || !email || firebaseState.mode !== `firebase` || !firebaseState.db) return;
+    const key = usernameKey(username);
+    await setDoc(doc(firebaseState.db, `loginAliases`, key), { username: normalize(username), email: normalize(email), userId, updatedAt: serverTimestamp() }, { merge:true });
+    await logAction(`set_alias`, `loginAliases`, key, null, { username, email, userId }, `تحديث اسم المستخدم للدخول`);
   },
   async getProfile(uidValue, email) {
     if (firebaseState.mode !== `firebase`) return firebaseState.profile;
@@ -295,46 +324,6 @@ export const erp = {
   }
 };
 
-
-export async function bootstrapOfficialFirebaseUsers() {
-  await erp.init();
-  if (firebaseState.mode !== `firebase`) throw new Error(`Firebase غير متصل. تحقق من الإعدادات أولاً.`);
-  let primaryProfile = null;
-  for (const [index, official] of OFFICIAL_BOOTSTRAP_USERS.entries()) {
-    try {
-      await createAuthUserViaRest(official.email, official.password);
-    } catch (error) {
-      if (!String(error.message || ``).includes(`EMAIL_EXISTS`)) throw error;
-    }
-    const authUser = await signInWithEmailAndPassword(firebaseState.auth, official.email, official.password);
-    const uidValue = authUser.user.uid;
-    const profile = {
-      fullName: official.fullName,
-      username: official.username,
-      email: official.email,
-      role: official.role,
-      status: `active`,
-      startDate: official.startDate,
-      normalMonthlySalary: Number(official.normalMonthlySalary || 0),
-      assignedWarehouseId: official.assignedWarehouseId || `main`,
-      cashBalance: Number(official.cashBalance || 0),
-      cliqBalance: Number(official.cliqBalance || 0),
-      advancesBalance: Number(official.advancesBalance || 0),
-      salaryBalance: Number(official.salaryBalance || 0),
-      createdBy: `bootstrap`,
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp()
-    };
-    await setDoc(doc(firebaseState.db, `users`, uidValue), profile, { merge:true });
-    if (index === 0) primaryProfile = { id: uidValue, ...profile };
-  }
-  await signInWithEmailAndPassword(firebaseState.auth, OFFICIAL_BOOTSTRAP_USERS[0].email, OFFICIAL_BOOTSTRAP_USERS[0].password);
-  firebaseState.profile = primaryProfile;
-  await setDoc(doc(firebaseState.db, `settings`, `company`), { ...seedData.settings[0], updatedAt: serverTimestamp(), createdAt: serverTimestamp() }, { merge:true });
-  await setDoc(doc(firebaseState.db, `warehouses`, `main`), { ...seedData.warehouses[0], updatedAt: serverTimestamp(), createdAt: serverTimestamp() }, { merge:true });
-  await logAction(`bootstrap`, `auth`, `official-users`, null, { users: OFFICIAL_BOOTSTRAP_USERS.map(u => u.username) }, `تهيئة المستخدمين الرسميين بدون بيانات تجريبية`);
-  return OFFICIAL_BOOTSTRAP_USERS;
-}
 
 export async function createAuthUserViaRest(email, password) {
   if (!firebaseState.config?.apiKey) throw new Error(`إعداد Firebase غير مكتمل.`);

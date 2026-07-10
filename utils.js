@@ -131,6 +131,16 @@ export function printVisibleTablesPdf(title = `تقرير`, root = document) {
   win.focus();
   win.print();
 }
+
+export function printHtmlPdf(title = `تقرير`, bodyHTML = ``) {
+  if (!bodyHTML) return toast(`لا يوجد محتوى للطباعة`, `warn`);
+  const win = window.open(``, `_blank`);
+  win.document.write(`<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><title>${esc(title)}</title><style>body{font-family:Arial,Tahoma,sans-serif;padding:24px;direction:rtl;color:#111827}h1{font-size:20px;margin:0 0 8px}.meta{color:#6b7280;margin:0 0 18px}.summary{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:14px 0}.box{border:1px solid #d1d5db;border-radius:10px;padding:10px}.box b{display:block;font-size:16px;margin-top:4px}table{border-collapse:collapse;width:100%;margin-bottom:18px}th,td{border:1px solid #ddd;padding:8px;font-size:12px;text-align:right;vertical-align:top}th{background:#f3f6f8}.total{font-weight:bold;background:#f9fafb}@media print{button{display:none}.page-break{page-break-after:always}}</style></head><body><h1>${esc(title)}</h1>${bodyHTML}</body></html>`);
+  win.document.close();
+  win.focus();
+  win.print();
+}
+
 export function bindSmartFilters(root, sourceRows, config, render) {
   const getFilteredRows = (excludeKey = ``) => sourceRows.filter(row => Object.entries(config).every(([key, cfg]) => {
     if (key === excludeKey) return true;

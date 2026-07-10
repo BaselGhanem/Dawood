@@ -1,77 +1,52 @@
-# Data Model - Official Version
+# Dawood ERP Data Model
 
-## users
+## Core Collections
 
-Fields:
-- fullName
-- username
-- email
-- role
-- status
-- normalMonthlySalary
-- salaryBalance: رصيد راتب تراكمي سابق؛ موجب يعني للموظف، وسالب يعني عليه.
-- cashBalance
-- cliqBalance
-- advancesBalance
-- assignedWarehouseId
-- permissions
+- `users`: حسابات المستخدمين، الصلاحيات، أرصدة الصندوق، CliQ، السلف، ورصيد الراتب التراكمي.
+- `loginAliases`: ربط اسم المستخدم بالبريد الإلكتروني لتسجيل الدخول باسم مختصر.
+- `settings`: إعدادات الشركة.
+- `warehouses`: المستودعات والسيارات.
+- `items`: الأصناف وأرصدة المخزون حسب المستودع.
+- `inventoryMovements`: كل حركة مخزون.
+- `salesInvoices`: فواتير البيع.
+- `customerDebts`: ذمم العملاء.
+- `collections`: التحصيلات.
+- `cashDeliveries`: تسليم النقد بين المستخدمين/الصندوق.
+- `internalTransfers`: تحويلات داخلية بين صناديق المستخدمين.
+- `employeeAdvances`: السلف والاقتطاعات.
+- `salaries`: كشوف الرواتب التراكمية.
+- `vehicleExpenses`: مصروفات السيارات.
+- `stockCounts`: جرد السيارات وفروقات النقص.
+- `systemLogs`: سجل حركات قابل للفلترة.
+- `notifications`: إشعارات المستخدمين.
 
-## internalTransfers
+## Balance Logic
 
-Workflow:
-1. sender sends transfer.
-2. amount is deducted from sender immediately.
-3. status = pending.
-4. receiver gets notification.
-5. receiver accepts: amount is added to receiver.
-6. receiver rejects: amount is returned to sender.
+### Internal Transfer
 
-Fields:
-- transferNumber
-- date
-- senderId / senderName
-- receiverId / receiverName
-- balanceField: cashBalance or cliqBalance
-- amount
-- status: pending / confirmed / rejected
-- requiresReceiverApproval
+1. عند الإرسال: يخصم المبلغ من المرسل فوراً.
+2. الحالة تصبح `pending`.
+3. المستلم فقط يوافق أو يرفض.
+4. عند الموافقة: يضاف المبلغ إلى المستلم.
+5. عند الرفض: يرجع المبلغ إلى المرسل.
 
-## employeeAdvances
+### Cash Delivery
 
-- employeeId
-- date
-- source
-- amount
-- fromOwnCashbox
-- status
+1. عند إنشاء طلب التسليم: يخصم المبلغ من المرسل كرصيد معلق.
+2. المستلم فقط يؤكد أو يرفض.
+3. عند التأكيد: يضاف المبلغ إلى صندوق المستلم.
+4. عند الرفض: يرجع المبلغ إلى المرسل.
 
-When source is own cashbox:
-- cashBalance decreases.
-- advancesBalance increases.
-- remaining salary decreases.
+### Advance
 
-## salaries
+السلفة الذاتية تخصم من `cashBalance` لصاحب الحساب وتزيد `advancesBalance` عليه.
 
-Cumulative formula:
+### Salary
 
-salaryBalanceAfter = previousSalaryBalance + entitlement - paidAmount
+`salaryBalanceAfter = previousSalaryBalance + baseSalary + bonus - deductions - advancesBalance - paidAmount`
 
-entitlement = normalMonthlySalary + bonus - deductions - advancesDeducted
+عند الترحيل:
 
-After posting salary:
-- advancesBalance resets to 0 because it was deducted in the salary cycle.
-- salaryBalance becomes salaryBalanceAfter.
-- cashBalance decreases by paidAmount.
-
-## systemLogs
-
-Every add/edit/delete/financial movement/login/bootstrap action is logged.
-
-## official seed
-
-Contains only:
-- settings/company
-- users: Dawood, Moatasem, Khader
-- warehouses/main
-
-No demo customers, items, suppliers, invoices, or movements.
+- يتم تصفير `advancesBalance` للموظف.
+- يتم تحديث `salaryBalance` بالقيمة الجديدة.
+- إذا تم اختيار صندوق صرف، يتم خصم `paidAmount` من صندوق الصرف وليس من صندوق الموظف.
