@@ -38,7 +38,7 @@ function renderRepDashboard(root, user, ctx) {
   const remainingSalary = number(user.salaryBalance) + number(user.normalMonthlySalary) - number(user.advancesBalance);
   root.innerHTML = `
     <section class="hero-card">
-      <div><span class="badge teal">مندوب</span><h2>اعمل من 4 أزرار فقط</h2><p>بيع نقدي، رصيد الصندوق، تحويل، وسلفة من الصندوق.</p></div>
+      <div><span class="badge teal">مندوب</span><h2>أهلاً ${esc(user.fullName || user.username || `زميلنا`)}</h2><p>بيع نقدي، رصيد الصندوق، تحويل، وسلفة من الصندوق.</p></div>
       <div class="hero-actions"><a class="btn primary" href="sales.html">بيع نقدي</a><a class="btn" href="finance.html">تحويل / سلفة</a></div>
     </section>
     <div class="grid four" style="margin-top:14px">
