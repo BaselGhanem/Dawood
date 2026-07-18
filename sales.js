@@ -1,5 +1,5 @@
 import { erp } from './firebase.js';
-import { $, esc, money, qty, number, uid, todayISO, getFormData, toast, table, statusBadge, lineBuilder, exportExcel, renderTabs, attachTabs, printHtmlPdf } from './utils.js';
+import { $, esc, money, qty, number, uid, todayISO, getFormData, toast, table, statusBadge, lineBuilder, exportExcel, renderTabs, attachTabs, printHtmlPdf, normalize } from './utils.js';
 
 export async function renderSales(root, user) {
   const isRep = user.role === `sales_rep`;
@@ -15,18 +15,18 @@ export async function renderSales(root, user) {
   const invoices = isRep ? rawInvoices.filter(i => i.sellerId === user.id) : rawInvoices;
   const debts = isRep ? rawDebts.filter(d => d.repId === user.id) : rawDebts;
   const tabs = isRep
-    ? [{id:`invoice`,label:`بيع نقدي`},{id:`myReport`,label:`بيعي بالصنف`},{id:`history`,label:`فواتيري`}]
+    ? [{id:`invoice`,label:`بيع نقدي`},{id:`customers`,label:`عملائي`},{id:`myReport`,label:`بيعي بالصنف`},{id:`history`,label:`فواتيري`}]
     : [{id:`invoice`,label:`فاتورة بيع`},{id:`customers`,label:`العملاء`},{id:`debts`,label:`ذمم العملاء`},{id:`myReport`,label:`البيع بالصنف`},{id:`history`,label:`الفواتير`}];
   root.innerHTML = `<section class="card">${renderTabs(tabs,`invoice`)}
     <div class="panel active" data-panel="invoice">${invoicePanel(customers, reps, user)}</div>
-    <div class="panel" data-panel="customers">${customersPanel(customers, reps)}</div>
+    <div class="panel" data-panel="customers">${customersPanel(customers, reps, user)}</div>
     <div class="panel" data-panel="debts">${debtsPanel(debts, user)}</div>
     <div class="panel" data-panel="myReport">${salesByItemPanel(invoices, items, reps, user)}</div>
     <div class="panel" data-panel="history">${historyPanel(filteredSales(invoices, user), customers, reps)}</div>
   </section>`;
   attachTabs(root);
   bindInvoice(root, items, customers, reps, user);
-  bindCustomers(root, reps, user, { customers, invoices, debts, collections, items });
+  bindCustomers(root, reps, user, { customers, allCustomers: rawCustomers, invoices, debts, collections, items });
   bindCollections(root, debts, user);
   bindSalesReport(root, invoices, items, reps, user);
   bindInvoicePrinting(root, { invoices, customers, reps, items });
@@ -37,7 +37,7 @@ function invoicePanel(customers, reps, user){
   let sellers = user.role === `sales_rep` ? reps.filter(r=>r.id===user.id) : reps.filter(u=>[`sales_rep`,`dawood`,`moatasem`,`admin`].includes(u.role));
   if (user.role === `sales_rep` && !sellers.length) sellers = [user];
   const cashOnly = user.role === `sales_rep`;
-  const missingHint = !customers.length ? `<div class="empty">لا يوجد عملاء معرفون لك حتى الآن. اطلب من داود أو معتصم تعريف العملاء وربطهم بك.</div>` : ``;
+  const missingHint = !customers.length ? `<div class="empty">لا يوجد عملاء معرفون لك حتى الآن. يمكنك إضافة عميل من تبويب عملائي، وسيظهر لك تنبيه إذا كان الاسم مشابها لعميل موجود.</div>` : ``;
   return `${missingHint}<div class="hint">${cashOnly ? `واجهة المندوب مختصرة للبيع النقدي فقط.` : `يمكن للـ Superuser تسجيل النقدي أو الآجل.`}</div><form id="salesForm" class="form-grid">
     <label>رقم الفاتورة<input name="invoiceNumber" value="${uid(`SAL`)}" readonly></label>
     <label>التاريخ<input name="date" type="date" value="${todayISO()}"></label>
@@ -49,11 +49,20 @@ function invoicePanel(customers, reps, user){
     <label class="wide">ملاحظات<textarea name="notes"></textarea></label>
   </form><div id="salesLines" style="margin-top:14px"></div><div class="actions" style="margin-top:14px"><button class="btn primary" id="confirmSaleBtn">اعتماد الفاتورة</button><button class="btn" id="draftSaleBtn">حفظ كمسودة</button></div>`;
 }
-function customersPanel(customers, reps){ return `<div class="actions"><button class="btn primary" id="newCustomerBtn">إضافة عميل</button><button class="btn" id="exportCustomersBtn">تصدير العملاء</button></div><br>${table([{label:`العميل`,value:`customerName`},{label:`الهاتف`,value:`phone`},{label:`المنطقة`,value:`area`},{label:`المندوب`,value:r=>esc(reps.find(u=>u.id===r.responsibleRepId)?.fullName||`—`)},{label:`الرصيد`,value:r=>money(r.currentBalance)},{label:`الحالة`,value:r=>statusBadge(r.status)},{label:`كشف`,value:r=>`<button class="btn" data-customer-statement="${esc(r.id)}">PDF</button>`}],customers,`لا يوجد عملاء`)}`; }
+function customersPanel(customers, reps, user){ const hint = user.role === `sales_rep` ? `<p class="hint">يمكنك تعريف عميل جديد. عند كتابة الاسم سيظهر تنبيه بالأسماء المشابهة لتجنب التكرار.</p>` : ``; return `${hint}<div class="actions"><button class="btn primary" id="newCustomerBtn">إضافة عميل</button><button class="btn" id="exportCustomersBtn">تصدير العملاء</button></div><br>${table([{label:`العميل`,value:`customerName`},{label:`الهاتف`,value:`phone`},{label:`المنطقة`,value:`area`},{label:`المندوب`,value:r=>esc(reps.find(u=>u.id===r.responsibleRepId)?.fullName||`—`)},{label:`الرصيد`,value:r=>money(r.currentBalance)},{label:`الحالة`,value:r=>statusBadge(r.status)},{label:`كشف`,value:r=>`<button class="btn" data-customer-statement="${esc(r.id)}">PDF</button>`}],customers,`لا يوجد عملاء`)}`; }
 function debtsPanel(debts, user){ const open = (user.role===`sales_rep`?debts.filter(d=>d.repId===user.id):debts).filter(d=>d.status!==`paid`); return `<div class="actions"><button class="btn" id="exportDebtsBtn">تصدير الذمم</button></div><br>${table([{label:`العميل`,value:`customerName`},{label:`الفاتورة`,value:`invoiceNumber`},{label:`الأصل`,value:r=>money(r.originalAmount)},{label:`المدفوع`,value:r=>money(r.paidAmount)},{label:`المتبقي`,value:r=>money(r.remainingAmount)},{label:`الاستحقاق`,value:`dueDate`},{label:`الحالة`,value:r=>statusBadge(r.status)},{label:`تحصيل`,value:r=>`<button class="btn green" data-collect="${esc(r.id)}">تسجيل تحصيل</button>`}],open,`لا توجد ذمم مفتوحة`)}`; }
 function historyPanel(invoices, customers, reps){ return `<div class="actions"><button class="btn" id="exportSalesBtn">تصدير الفواتير</button></div><br>${table([{label:`رقم`,value:`invoiceNumber`},{label:`التاريخ`,value:`date`},{label:`العميل`,value:r=>esc(customers.find(c=>c.id===r.customerId)?.customerName||r.customerName||`—`)},{label:`البائع`,value:r=>esc(reps.find(u=>u.id===r.sellerId)?.fullName||`—`)},{label:`النوع`,value:r=>r.saleType===`cash`?`نقدي`:`ذمم`},{label:`الإجمالي`,value:r=>money(r.total)},{label:`الحالة`,value:r=>statusBadge(r.status)},{label:`طباعة`,value:r=>`<button class="btn" data-print-invoice="${esc(r.id)}">طباعة</button>`}],invoices,`لا توجد فواتير`)}`; }
 function salesByItemPanel(invoices, items, reps, user){ const sellerSelect = user.role === `sales_rep` ? `` : `<label>المندوب<select id="salesReportRep"><option value="">الكل</option>${reps.filter(r=>[`sales_rep`,`dawood`,`moatasem`,`admin`].includes(r.role)).map(r=>`<option value="${esc(r.id)}">${esc(r.fullName)}</option>`).join(``)}</select></label>`; return `<div class="filters"><label>من تاريخ<input id="salesReportFrom" type="date" value="${todayISO().slice(0,8)}01"></label><label>إلى تاريخ<input id="salesReportTo" type="date" value="${todayISO()}"></label>${sellerSelect}<label>الصنف<select id="salesReportItem"><option value="">الكل</option>${items.map(i=>`<option value="${esc(i.id)}">${esc(i.itemName)}</option>`).join(``)}</select></label><button class="btn" id="exportSalesByItemBtn">تصدير التقرير</button></div><div id="salesByItemResult" style="margin-top:14px"></div>`; }
-function customerForm(reps){ return `<form id="customerForm" class="form-grid"><label>اسم العميل<input name="customerName" required></label><label>الهاتف<input name="phone" inputmode="tel"></label><label>المنطقة<input name="area"></label><label>المندوب المسؤول<select name="responsibleRepId">${reps.map(r=>`<option value="${esc(r.id)}">${esc(r.fullName)}</option>`).join(``)}</select></label><label>رصيد افتتاحي<input name="openingBalance" type="number" step="0.001" value="0"></label><label>الحالة<select name="status"><option value="active">فعال</option><option value="inactive">غير فعال</option></select></label><label class="wide">ملاحظات<textarea name="notes"></textarea></label></form>`; }
+function customerForm(reps, user){
+  const isRep = user.role === `sales_rep`;
+  const repField = isRep
+    ? `<label>المندوب المسؤول<input value="${esc(user.fullName || user.username || `مندوب`)}" readonly><input type="hidden" name="responsibleRepId" value="${esc(user.id)}"></label>`
+    : `<label>المندوب المسؤول<select name="responsibleRepId">${reps.map(r=>`<option value="${esc(r.id)}">${esc(r.fullName)}</option>`).join(``)}</select></label>`;
+  const financialFields = isRep
+    ? `<input type="hidden" name="openingBalance" value="0"><input type="hidden" name="status" value="active">`
+    : `<label>رصيد افتتاحي<input name="openingBalance" type="number" step="0.001" value="0"></label><label>الحالة<select name="status"><option value="active">فعال</option><option value="inactive">غير فعال</option></select></label>`;
+  return `<form id="customerForm" class="form-grid"><label>اسم العميل<input name="customerName" required autocomplete="off"></label><label>الهاتف<input name="phone" inputmode="tel"></label><label>المنطقة<input name="area"></label>${repField}${financialFields}<div id="customerSimilarBox" class="hint wide">اكتب اسم العميل، وسيظهر هنا أي اسم مشابه موجود مسبقاً.</div><label class="wide">ملاحظات<textarea name="notes"></textarea></label></form>`;
+}
 
 function bindInvoice(root, items, customers, reps, user){
   let lines=[];
@@ -91,15 +100,47 @@ function bindInvoice(root, items, customers, reps, user){
 function bindCustomers(root,reps,user, ctx){
   root.addEventListener(`click`,async e=>{
     if(e.target.closest(`#newCustomerBtn`)){
-      if(user.role===`sales_rep`) return toast(`تعريف العملاء من داود أو معتصم فقط`,`err`);
       const {modal}=await import('./utils.js');
-      modal(`إضافة عميل`,customerForm(reps),[{label:`حفظ`,className:`primary`,handler:async wrap=>{const f=$(`#customerForm`,wrap); if(!f.reportValidity()) return; const d=getFormData(f); await erp.add(`customers`,{...d,openingBalance:number(d.openingBalance),currentBalance:number(d.openingBalance)}); wrap.remove(); toast(`تم حفظ العميل`); location.reload();}}]);
+      const wrap = modal(`إضافة عميل`,customerForm(reps,user),[{label:`حفظ`,className:`primary`,handler:async wrap=>{const f=$(`#customerForm`,wrap); if(!f.reportValidity()) return; const d=getFormData(f); if(user.role===`sales_rep`){ d.responsibleRepId=user.id; d.openingBalance=0; d.status=`active`; } const similar=findSimilarCustomers(ctx.allCustomers || ctx.customers || [], d.customerName, d.phone); if(similar.length) toast(`تنبيه: يوجد ${similar.length} عميل مشابه. تأكد قبل الحفظ.`,`warn`); await erp.add(`customers`,{...d,openingBalance:number(d.openingBalance),currentBalance:number(d.openingBalance)}); wrap.remove(); toast(`تم حفظ العميل`); location.reload();}}]);
+      bindSimilarCustomerWarning(wrap, ctx.allCustomers || ctx.customers || []);
     }
     const statement=e.target.closest(`[data-customer-statement]`); if(statement) printCustomerStatement(statement.dataset.customerStatement, ctx);
-    if(e.target.closest(`#exportCustomersBtn`)) exportExcel(`customers.xls`, await erp.list(`customers`));
-    if(e.target.closest(`#exportSalesBtn`)) exportExcel(`sales.xls`, filteredSales(await erp.list(`salesInvoices`), user));
-    if(e.target.closest(`#exportDebtsBtn`)) exportExcel(`customer-debts.xls`, await erp.list(`customerDebts`));
+    if(e.target.closest(`#exportCustomersBtn`)) exportExcel(`customers.xls`, user.role===`sales_rep` ? ctx.customers : await erp.safeList(`customers`));
+    if(e.target.closest(`#exportSalesBtn`)) exportExcel(`sales.xls`, filteredSales(await erp.safeList(`salesInvoices`), user));
+    if(e.target.closest(`#exportDebtsBtn`)) exportExcel(`customer-debts.xls`, user.role===`sales_rep` ? await erp.safeList(`customerDebts`, { where:[[ `repId`, `==`, user.id ]] }) : await erp.safeList(`customerDebts`));
   });
+}
+function customerTokens(value){ return normalize(value).replace(/[إأآا]/g,`ا`).replace(/[ة]/g,`ه`).replace(/[ى]/g,`ي`).replace(/[^\u0600-\u06FFa-z0-9 ]+/g,` `).split(/\s+/).filter(x=>x.length>1); }
+function similarScore(name, customer){
+  const a = customerTokens(name);
+  const b = customerTokens(customer.customerName || ``);
+  if(!a.length || !b.length) return 0;
+  const joinedA = a.join(` `), joinedB = b.join(` `);
+  if(joinedA === joinedB) return 100;
+  if(joinedA.includes(joinedB) || joinedB.includes(joinedA)) return 85;
+  const common = a.filter(token => b.includes(token)).length;
+  return Math.round((common / Math.max(a.length, b.length)) * 100);
+}
+function findSimilarCustomers(customers, name, phone){
+  const cleanPhone = normalize(phone).replace(/\D/g,``);
+  return customers.map(customer => ({ customer, score: Math.max(similarScore(name, customer), cleanPhone && normalize(customer.phone).replace(/\D/g,``) === cleanPhone ? 100 : 0) }))
+    .filter(row => row.score >= 45)
+    .sort((a,b)=>b.score-a.score)
+    .slice(0,5);
+}
+function bindSimilarCustomerWarning(wrap, customers){
+  const nameInput = $(`[name="customerName"]`, wrap);
+  const phoneInput = $(`[name="phone"]`, wrap);
+  const box = $(`#customerSimilarBox`, wrap);
+  const render = () => {
+    const matches = findSimilarCustomers(customers, nameInput?.value || ``, phoneInput?.value || ``);
+    box.innerHTML = matches.length
+      ? `<strong>انتبه: يوجد عملاء مشابهون</strong>${matches.map(({customer,score})=>`<div class="timeline-item"><strong>${esc(customer.customerName || `بدون اسم`)}</strong><span>${esc(customer.phone || `لا يوجد هاتف`)} · ${esc(customer.area || `بدون منطقة`)} · تشابه ${score}%</span></div>`).join(``)}`
+      : `لا يوجد اسم مشابه واضح حتى الآن.`;
+  };
+  nameInput?.addEventListener(`input`, render);
+  phoneInput?.addEventListener(`input`, render);
+  render();
 }
 function bindCollections(root,debts,user){
   root.addEventListener(`click`,async e=>{
