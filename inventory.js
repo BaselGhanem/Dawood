@@ -4,7 +4,8 @@ import { can } from './permissions.js';
 
 const cats = { raw_material:`مواد خام`, manufactured:`منتجات مصنّعة`, ready_goods:`بضاعة جاهزة`, tools:`عدد وأدوات`, maintenance:`صيانة`, miscellaneous:`متفرقات` };
 export async function renderWarehouse(root, user) {
-  const [items, warehouses, reps] = await Promise.all([erp.list(`items`), erp.list(`warehouses`), erp.list(`users`, { where:[[ `role`, `==`, `sales_rep` ]] })]);
+  const [items, warehouses, directory] = await Promise.all([erp.safeList(`items`), erp.safeList(`warehouses`), erp.userDirectory()]);
+  const reps = directory.filter(u => u.role === `sales_rep`);
   root.innerHTML = `<section class="card">
     ${renderTabs([{id:`stock`,label:`الرصيد`},{id:`movement`,label:`حركة مخزون`},{id:`loading`,label:`تحميل سيارة`},{id:`returns`,label:`إرجاع بضاعة`},{id:`count`,label:`جرد سيارة`}], `stock`)}
     <div class="panel active" data-panel="stock">${stockPanel(items, warehouses, user)}</div>

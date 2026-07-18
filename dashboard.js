@@ -3,11 +3,31 @@ import { esc, money, qty, sum, table, statusBadge, dateTime, todayISO, number } 
 import { isSuperuser, isViewOnly } from './permissions.js';
 
 export async function renderDashboard(root, user) {
-  const [items, users, sales, customerDebts, supplierDebts, deliveries, transfers, advances, production, counts] = await Promise.all([
-    erp.list(`items`), erp.list(`users`), erp.list(`salesInvoices`), erp.list(`customerDebts`), erp.list(`supplierDebts`), erp.list(`cashDeliveries`), erp.list(`internalTransfers`), erp.list(`employeeAdvances`), erp.list(`productionOrders`), erp.list(`stockCounts`)
+  if (user.role === `sales_rep`) {
+    const [items, sales, deliveries, transfers, advances] = await Promise.all([
+      erp.safeList(`items`),
+      erp.safeList(`salesInvoices`, { where:[[ `sellerId`, `==`, user.id ]] }),
+      erp.safeList(`cashDeliveries`, { includeDeleted:true }),
+      erp.safeList(`internalTransfers`, { includeDeleted:true }),
+      erp.safeList(`employeeAdvances`, { includeDeleted:true })
+    ]);
+    return renderRepDashboard(root, user, {
+      items,
+      sales: sales.filter(s => s.sellerId === user.id),
+      deliveries: deliveries.filter(d => d.senderId === user.id || d.receiverId === user.id),
+      transfers: transfers.filter(t => t.senderId === user.id || t.receiverId === user.id),
+      advances: advances.filter(a => a.employeeId === user.id)
+    });
+  }
+  if (isViewOnly(user)) {
+    const [items, users, customerDebts, sales, transfers] = await Promise.all([
+      erp.safeList(`items`), erp.safeList(`users`), erp.safeList(`customerDebts`), erp.safeList(`salesInvoices`), erp.safeList(`internalTransfers`, { includeDeleted:true })
+    ]);
+    return renderGeneralManagerDashboard(root, { items, users, customerDebts, sales, transfers });
+  }
+  const [items, users, sales, customerDebts, supplierDebts, deliveries, transfers, production, counts] = await Promise.all([
+    erp.safeList(`items`), erp.safeList(`users`), erp.safeList(`salesInvoices`), erp.safeList(`customerDebts`), erp.safeList(`supplierDebts`), erp.safeList(`cashDeliveries`, { includeDeleted:true }), erp.safeList(`internalTransfers`, { includeDeleted:true }), erp.safeList(`productionOrders`), erp.safeList(`stockCounts`)
   ]);
-  if (user.role === `sales_rep`) return renderRepDashboard(root, user, { items, sales, deliveries, transfers, advances });
-  if (isViewOnly(user)) return renderGeneralManagerDashboard(root, { items, users, customerDebts, sales, transfers });
   return renderSuperDashboard(root, user, { items, users, sales, customerDebts, supplierDebts, deliveries, transfers, production, counts });
 }
 

@@ -64,7 +64,7 @@ async function renderShell(user, activePage) {
   $$(`.nav a`, sidebar).forEach(link => link.addEventListener(`click`, () => setMenu(false)));
   $(`#logoutBtn`).addEventListener(`click`, async () => { await erp.logout(); location.href = `login.html`; });
   $(`#themeBtn`).addEventListener(`click`, () => setTheme(document.body.classList.contains(`dark`) ? `light` : `dark`));
-  $(`#quickSearchBtn`).addEventListener(`click`, quickSearch);
+  $(`#quickSearchBtn`).addEventListener(`click`, () => quickSearch(user));
   $(`#pageExcelBtn`).addEventListener(`click`, () => exportVisibleTablesExcel(`${activePage}.xls`, document.getElementById(`pageContent`)));
   $(`#pagePdfBtn`).addEventListener(`click`, () => printVisibleTablesPdf(title, document.getElementById(`pageContent`)));
 
@@ -87,12 +87,20 @@ function applyViewOnlyMode(root) {
     $$(`select`, form).forEach(el => el.disabled = true);
   });
 }
-async function quickSearch() {
-  const [items, customers, users, sales] = await Promise.all([erp.list(`items`), erp.list(`customers`), erp.list(`users`), erp.list(`salesInvoices`)]);
+async function quickSearch(user) {
+  const isRep = user?.role === `sales_rep`;
+  const [items, rawCustomers, users, rawSales] = await Promise.all([
+    erp.safeList(`items`),
+    erp.safeList(`customers`),
+    isRep ? erp.userDirectory() : erp.safeList(`users`),
+    isRep ? erp.safeList(`salesInvoices`, { where:[[ `sellerId`, `==`, user.id ]] }) : erp.safeList(`salesInvoices`)
+  ]);
+  const customers = isRep ? rawCustomers.filter(c => !c.responsibleRepId || c.responsibleRepId === user.id) : rawCustomers;
+  const sales = isRep ? rawSales.filter(x => x.sellerId === user.id) : rawSales;
   const all = [
     ...items.map(x => ({ type:`صنف`, label:`${x.itemCode} - ${x.itemName}`, url:`warehouse.html` })),
     ...customers.map(x => ({ type:`عميل`, label:`${x.customerName} - ${x.phone || ``}`, url:`sales.html` })),
-    ...users.map(x => ({ type:`مستخدم`, label:`${x.fullName} - ${roleLabel(x.role)}`, url:`employees.html` })),
+    ...users.map(x => ({ type:`مستخدم`, label:`${x.fullName} - ${roleLabel(x.role)}`, url:isRep ? `finance.html` : `employees.html` })),
     ...sales.map(x => ({ type:`فاتورة`, label:`${x.invoiceNumber} - ${x.customerName || ``}`, url:`sales.html` }))
   ];
   modal(`بحث سريع`, `<label>ابحث بالاسم أو الكود أو رقم الفاتورة<input id="quickSearchInput"></label><div id="quickSearchResults" class="grid"></div>`);

@@ -1,16 +1,42 @@
 import { erp } from './firebase.js';
 import { $, esc, money, qty, number, sum, table, statusBadge, exportExcel, todayISO } from './utils.js';
+import { isViewOnly } from './permissions.js';
 
 const reportCollections = {
   inventory:`items`, movements:`inventoryMovements`, manufacturing:`productionOrders`, sales:`salesInvoices`, receivables:`customerDebts`, purchases:`purchaseInvoices`, payables:`supplierDebts`, cashbox:`cashDeliveries`, transfers:`internalTransfers`, salaries:`salaries`, advances:`employeeAdvances`, expenses:`vehicleExpenses`, shortages:`stockCounts`, logs:`systemLogs`
 };
 const reportLabels = { inventory:`المخزون`, movements:`حركات المخزون`, manufacturing:`التصنيع`, sales:`المبيعات`, receivables:`ذمم العملاء`, purchases:`المشتريات`, payables:`ذمم الموردين`, cashbox:`الصندوق`, transfers:`التحويلات`, salaries:`الرواتب`, advances:`السلف`, expenses:`مصاريف السيارات`, shortages:`فروقات الجرد`, logs:`سجل الحركات` };
 
+function labelsForUser(user) {
+  if (user.role === `sales_rep`) return { sales:`مبيعاتي`, transfers:`تحويلاتي`, cashbox:`حركات صندوقي`, advances:`سلفي`, expenses:`مصاريفي` };
+  if (isViewOnly(user)) return { inventory:reportLabels.inventory, sales:reportLabels.sales, receivables:reportLabels.receivables, cashbox:reportLabels.cashbox, transfers:reportLabels.transfers, salaries:reportLabels.salaries, advances:reportLabels.advances, expenses:reportLabels.expenses };
+  return reportLabels;
+}
+function scopeRows(type, rows, user) {
+  if (user.role !== `sales_rep`) return rows;
+  return rows.filter(row => {
+    if (type === `sales`) return row.sellerId === user.id;
+    if (type === `transfers`) return row.senderId === user.id || row.receiverId === user.id;
+    if (type === `cashbox`) return row.senderId === user.id || row.receiverId === user.id;
+    if (type === `advances` || type === `salaries`) return row.employeeId === user.id;
+    if (type === `expenses`) return row.repId === user.id;
+    return false;
+  });
+}
+
 export async function renderReports(root, user) {
-  const [users, warehouses, items, customers, suppliers] = await Promise.all([erp.list(`users`), erp.list(`warehouses`), erp.list(`items`), erp.list(`customers`), erp.list(`suppliers`)]);
+  const isRep = user.role === `sales_rep`;
+  const visibleLabels = labelsForUser(user);
+  const [users, warehouses, items, customers, suppliers] = await Promise.all([
+    isRep ? erp.userDirectory() : erp.safeList(`users`),
+    erp.safeList(`warehouses`),
+    erp.safeList(`items`),
+    erp.safeList(`customers`),
+    isRep ? [] : erp.safeList(`suppliers`)
+  ]);
   root.innerHTML = `<section class="card">
     <div class="filters">
-      <label>التقرير<select id="reportType">${Object.entries(reportLabels).map(([k,v])=>`<option value="${k}">${v}</option>`).join(``)}</select></label>
+      <label>التقرير<select id="reportType">${Object.entries(visibleLabels).map(([k,v])=>`<option value="${k}">${v}</option>`).join(``)}</select></label>
       <label>من تاريخ<input id="fromDate" type="date" value="${todayISO().slice(0,8)}01"></label>
       <label>إلى تاريخ<input id="toDate" type="date" value="${todayISO()}"></label>
       <label>المستخدم<select id="reportUser"><option value="">الكل</option></select></label>
@@ -31,7 +57,7 @@ export async function renderReports(root, user) {
     const type = $(`#reportType`, root).value;
     if(type !== state.type){
       state.type = type;
-      state.rawRows = await erp.list(reportCollections[type], { includeDeleted:true });
+      state.rawRows = scopeRows(type, await erp.safeList(reportCollections[type], { includeDeleted:true }), user);
       [`reportUser`,`reportItem`,`reportParty`,`reportStatus`].forEach(id=>{ const el=$(`#${id}`,root); if(el) el.value=``; });
     }
   }

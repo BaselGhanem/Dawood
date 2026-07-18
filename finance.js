@@ -3,9 +3,21 @@ import { $, esc, money, number, uid, todayISO, getFormData, toast, table, status
 import { can, isSuperuser } from './permissions.js';
 
 export async function renderFinance(root, user) {
-  const [users, deliveries, transfers, advances, salaries, expenses] = await Promise.all([
-    erp.list(`users`), erp.list(`cashDeliveries`, { includeDeleted:true }), erp.list(`internalTransfers`, { includeDeleted:true }), erp.list(`employeeAdvances`, { includeDeleted:true }), erp.list(`salaries`, { includeDeleted:true }), erp.list(`vehicleExpenses`, { includeDeleted:true })
+  const isRep = user.role === `sales_rep`;
+  const [rawUsers, rawDeliveries, rawTransfers, rawAdvances, rawSalaries, rawExpenses] = await Promise.all([
+    isRep ? erp.userDirectory() : erp.safeList(`users`),
+    erp.safeList(`cashDeliveries`, { includeDeleted:true }),
+    erp.safeList(`internalTransfers`, { includeDeleted:true }),
+    erp.safeList(`employeeAdvances`, { includeDeleted:true }),
+    erp.safeList(`salaries`, { includeDeleted:true }),
+    erp.safeList(`vehicleExpenses`, { includeDeleted:true })
   ]);
+  const users = mergeCurrentUser(rawUsers, user);
+  const deliveries = isRep ? rawDeliveries.filter(d => d.senderId === user.id || d.receiverId === user.id) : rawDeliveries;
+  const transfers = isRep ? rawTransfers.filter(t => t.senderId === user.id || t.receiverId === user.id) : rawTransfers;
+  const advances = isRep ? rawAdvances.filter(a => a.employeeId === user.id) : rawAdvances;
+  const salaries = isRep ? rawSalaries.filter(s => s.employeeId === user.id) : rawSalaries;
+  const expenses = isRep ? rawExpenses.filter(x => x.repId === user.id) : rawExpenses;
   const tabs = user.role === `sales_rep`
     ? [{id:`transfer`,label:`تحويل مصاري`},{id:`incoming`,label:`إشعاراتي`},{id:`advances`,label:`سلفة`},{id:`salary`,label:`راتبي`}]
     : [{id:`delivery`,label:`تسليم نقد`},{id:`confirm`,label:`تأكيد الاستلام`},{id:`transfer`,label:`تحويل داخلي`},{id:`incoming`,label:`موافقات التحويل`},{id:`advances`,label:`السلف`},{id:`salaries`,label:`الرواتب`},{id:`expenses`,label:`مصروف سيارة`}];
@@ -24,11 +36,17 @@ export async function renderFinance(root, user) {
   bindFinance(root, users, deliveries, transfers, user);
 }
 function activeUsers(users){ return users.filter(u => ![`inactive`,`deleted`].includes(u.status)); }
+function mergeCurrentUser(users, user) {
+  const map = new Map((users || []).map(u => [u.id, u]));
+  if (user?.id) map.set(user.id, { ...(map.get(user.id) || {}), ...user });
+  return [...map.values()];
+}
 function canActOnDelivery(d, user){ return d.status===`pending` && d.receiverId===user.id; }
 function deliveryPanel(users,user){
   const list=activeUsers(users);
   const senderOptions = isSuperuser(user) || can(user,`finance`) ? list : list.filter(u=>u.id===user.id);
-  const receivers=list.filter(u=>[`dawood`,`moatasem`,`admin`,`finance_user`,`accountant`].includes(u.role));
+  let receivers=list.filter(u=>[`dawood`,`moatasem`,`admin`,`finance_user`,`accountant`].includes(u.role));
+  if (!receivers.length) receivers = list.filter(u=>u.id!==user.id);
   return `<div class="hint">تسليم النقد يخصم من المرسل فوراً كرصيد معلّق. إذا رفض المستلم، يرجع المبلغ للمرسل.</div><form id="deliveryForm" class="form-grid">
     <label>رقم التسليم<input name="deliveryNumber" value="${uid(`DEL`)}" readonly></label>
     <label>التاريخ<input name="date" type="date" value="${todayISO()}"></label>

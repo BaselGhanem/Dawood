@@ -1,6 +1,6 @@
 import { initializeApp, getApp, getApps } from 'https://www.gstatic.com/firebasejs/12.15.0/firebase-app.js';
 import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged, browserLocalPersistence, setPersistence, sendPasswordResetEmail } from 'https://www.gstatic.com/firebasejs/12.15.0/firebase-auth.js';
-import { getFirestore, collection, doc, getDoc, getDocs, setDoc, addDoc, updateDoc, deleteDoc, query, where, orderBy, serverTimestamp, writeBatch, limit } from 'https://www.gstatic.com/firebasejs/12.15.0/firebase-firestore.js';
+import { getFirestore, collection, doc, getDoc, getDocs, setDoc, addDoc, updateDoc, deleteDoc, query, where, orderBy, serverTimestamp, writeBatch, limit, increment } from 'https://www.gstatic.com/firebasejs/12.15.0/firebase-firestore.js';
 import { getStorage } from 'https://www.gstatic.com/firebasejs/12.15.0/firebase-storage.js';
 import { uid, nowISO, normalize } from './utils.js';
 
@@ -28,12 +28,28 @@ export const OFFICIAL_BASE_USERS = [
   { id:`u-khader`, fullName:`خضر غانم`, username:`khader`, email:`khader@dawood-c1c03.com`, role:`general_manager`, status:`active`, startDate:`2026-07-09`, normalMonthlySalary:0, assignedWarehouseId:`main`, cashBalance:0, cliqBalance:0, advancesBalance:0, salaryBalance:0 }
 ];
 
+export function publicUserProfile(user = {}) {
+  return {
+    id: user.id || user.uid || ``,
+    fullName: user.fullName || user.email || `غير معروف`,
+    username: usernameKey(user.username || ``),
+    email: String(user.email || ``).trim().toLowerCase(),
+    role: user.role || `viewer`,
+    status: user.status || `active`,
+    assignedWarehouseId: user.assignedWarehouseId || ``,
+    updatedAt: nowISO()
+  };
+}
+
+export const OFFICIAL_USER_DIRECTORY = OFFICIAL_BASE_USERS.map(publicUserProfile);
+
 export const firebaseState = { mode: `booting`, app: null, auth: null, db: null, storage: null, config: null, user: null, profile: null, lastError: null };
 let memoryLocalStore = null;
 
 export const seedData = {
   settings: [{ id:`company`, companyName:`نظام داود غانم`, logoText:`د`, primaryColor:`#099999`, currency:`JOD`, fiscalYearStart:`01-01`, theme:`light` }],
   users: OFFICIAL_BASE_USERS.map(u => ({ ...u, createdBy:`system`, createdAt:nowISO(), lastLogin:null })),
+  userDirectory: OFFICIAL_USER_DIRECTORY.map(u => ({ ...u, createdBy:`system`, createdAt:nowISO() })),
   warehouses: [{ id:`main`, warehouseCode:`MAIN`, warehouseName:`المستودع الرئيسي`, type:`main`, status:`active`, managerId:`u-dawood`, createdAt:nowISO(), createdBy:`system` }],
   items: [],
   manufacturingRecipes: [],
@@ -122,6 +138,7 @@ export const erp = {
       return onAuthStateChanged(firebaseState.auth, async authUser => {
         firebaseState.user = authUser;
         firebaseState.profile = authUser ? await this.getProfile(authUser.uid, authUser.email) : null;
+        if (firebaseState.profile) this.setUserDirectory(firebaseState.profile).catch(error => console.warn(`تعذر تحديث دليل المستخدمين العام.`, error));
         callback(firebaseState.profile);
       });
     }
@@ -181,6 +198,51 @@ export const erp = {
     const key = usernameKey(username);
     await setDoc(doc(firebaseState.db, `loginAliases`, key), { username: normalize(username), email: normalize(email), userId, updatedAt: serverTimestamp() }, { merge:true });
     await logAction(`set_alias`, `loginAliases`, key, null, { username, email, userId }, `تحديث اسم المستخدم للدخول`);
+  },
+  async setUserDirectory(userLike) {
+    const row = publicUserProfile(userLike);
+    if (!row.id) return null;
+    if (firebaseState.mode === `firebase` && firebaseState.db) {
+      await setDoc(doc(firebaseState.db, `userDirectory`, row.id), { ...row, updatedAt: serverTimestamp() }, { merge:true });
+    } else if (firebaseState.mode === `local`) {
+      const store = readLocalStore();
+      store.userDirectory ||= [];
+      const index = store.userDirectory.findIndex(u => u.id === row.id);
+      if (index >= 0) store.userDirectory[index] = { ...store.userDirectory[index], ...row };
+      else store.userDirectory.push(row);
+      writeLocalStore(store);
+    }
+    return row;
+  },
+  async syncUserDirectory(users = []) {
+    const rows = [];
+    for (const userLike of users) {
+      const row = await this.setUserDirectory(userLike);
+      if (row) rows.push(row);
+    }
+    await logAction(`sync_directory`, `userDirectory`, `bulk`, null, { count: rows.length }, `مزامنة دليل المستخدمين العام`);
+    return rows;
+  },
+  async userDirectory(options = {}) {
+    const fallback = [...OFFICIAL_USER_DIRECTORY];
+    if (firebaseState.profile?.id) fallback.push(publicUserProfile(firebaseState.profile));
+    let rows = [];
+    if (firebaseState.mode === `firebase` && firebaseState.db) {
+      try { rows = await this.list(`userDirectory`, { includeDeleted:true }); }
+      catch (error) { console.warn(`تعذر قراءة دليل المستخدمين. سيتم استخدام البيانات الأساسية فقط.`, error); }
+    } else {
+      rows = readLocalStore().userDirectory || [];
+    }
+    const map = new Map();
+    [...fallback, ...rows].forEach(row => { if (row?.id) map.set(row.id, { ...map.get(row.id), ...row }); });
+    return [...map.values()].filter(row => options.includeInactive || ![`inactive`,`deleted`].includes(row.status));
+  },
+  async safeList(collectionName, options = {}) {
+    try { return await this.list(collectionName, options); }
+    catch (error) {
+      console.warn(`تعذر تحميل ${collectionName}.`, error);
+      return Array.isArray(options.fallback) ? options.fallback : [];
+    }
   },
   async getProfile(uidValue, email) {
     if (firebaseState.mode !== `firebase`) return firebaseState.profile;
@@ -314,13 +376,24 @@ export const erp = {
     return after;
   },
   async adjustUserBalance(userId, field, delta, reason, relatedId = ``) {
-    const user = await this.get(`users`, userId);
-    if (!user) throw new Error(`المستخدم غير موجود.`);
-    const before = Number(user[field] || 0);
-    const after = before + Number(delta);
-    await this.update(`users`, userId, { [field]: after }, true);
-    await this.add(`systemLogs`, { actionType:`financial_balance`, module:`finance`, relatedDocumentId:relatedId, userName: firebaseState.profile?.fullName || `system`, notes:reason, oldValue:{ [field]:before }, newValue:{ [field]:after } }, false);
-    return after;
+    const allowedFields = [`cashBalance`, `cliqBalance`, `advancesBalance`, `salaryBalance`];
+    if (!allowedFields.includes(field)) throw new Error(`حقل الرصيد غير مسموح.`);
+    let user = null;
+    try { user = await this.get(`users`, userId); }
+    catch (error) { console.warn(`تعذر قراءة رصيد المستخدم قبل التعديل. سيتم استخدام increment آمن.`, error); }
+    if (user) {
+      const before = Number(user[field] || 0);
+      const after = before + Number(delta);
+      await this.update(`users`, userId, { [field]: after }, true);
+      await this.add(`systemLogs`, { actionType:`financial_balance`, module:`finance`, relatedDocumentId:relatedId, userName: firebaseState.profile?.fullName || `system`, notes:reason, oldValue:{ [field]:before }, newValue:{ [field]:after } }, false);
+      return after;
+    }
+    if (firebaseState.mode === `firebase` && firebaseState.db) {
+      await updateDoc(doc(firebaseState.db, `users`, userId), { [field]: increment(Number(delta)), updatedAt: serverTimestamp(), updatedBy: firebaseState.profile?.id || firebaseState.user?.uid || `system` });
+      await this.add(`systemLogs`, { actionType:`financial_balance`, module:`finance`, relatedDocumentId:relatedId, userName: firebaseState.profile?.fullName || `system`, notes:reason, oldValue:{ [field]:`غير مقروء` }, newValue:{ [field]:`increment ${Number(delta)}` } }, false);
+      return null;
+    }
+    throw new Error(`المستخدم غير موجود.`);
   }
 };
 

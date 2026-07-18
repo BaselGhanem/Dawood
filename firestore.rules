@@ -18,6 +18,23 @@ service cloud.firestore {
     function affectedOnly(keys) { return request.resource.data.diff(resource.data).affectedKeys().hasOnly(keys); }
     function safeOwnLoginPatch(userId) { return (ownsUser(userId) || ownEmail()) && affectedOnly(['lastLogin','updatedAt','updatedBy']); }
     function safeFinancialPatch() { return isActive() && affectedOnly(['cashBalance','cliqBalance','advancesBalance','salaryBalance','lastLogin','updatedAt','updatedBy']); }
+    function directoryKeys() { return ['id','fullName','username','email','role','status','assignedWarehouseId','createdAt','createdBy','updatedAt','updatedBy']; }
+    function safeOwnDirectoryCreate(userId) {
+      return ownsUser(userId)
+        && request.resource.data.keys().hasOnly(directoryKeys())
+        && request.resource.data.id == userId
+        && request.resource.data.email == request.auth.token.email
+        && request.resource.data.role == role()
+        && request.resource.data.status == userDoc().data.status;
+    }
+    function safeOwnDirectoryUpdate(userId) {
+      return ownsUser(userId)
+        && affectedOnly(directoryKeys())
+        && request.resource.data.id == userId
+        && request.resource.data.email == request.auth.token.email
+        && request.resource.data.role == role()
+        && request.resource.data.status == userDoc().data.status;
+    }
 
     match /loginAliases/{username} {
       allow read: if true;
@@ -25,13 +42,19 @@ service cloud.firestore {
       allow delete: if false;
     }
 
-    match /users/{userId} {
+    match /userDirectory/{userId} {
       allow read: if isActive();
+      allow create: if isSuperuser() || safeOwnDirectoryCreate(userId);
+      allow update: if isSuperuser() || safeOwnDirectoryUpdate(userId);
+      allow delete: if false;
+    }
+
+    match /users/{userId} {
+      allow read: if canViewAll() || isFinance() || ownsUser(userId) || ownEmail();
       allow create: if isSuperuser();
       allow update: if isSuperuser() || safeOwnLoginPatch(userId) || safeFinancialPatch();
       allow delete: if false;
     }
-
     match /settings/{docId} { allow read: if signedIn(); allow write: if isSuperuser(); }
     match /roles/{docId} { allow read: if signedIn(); allow write: if isSuperuser(); }
     match /permissions/{docId} { allow read: if signedIn(); allow write: if isSuperuser(); }
@@ -49,9 +72,9 @@ service cloud.firestore {
     match /customerDebts/{docId} { allow read: if isSales() || isFinance() || isGeneralManager(); allow create, update: if isSales() || isFinance(); allow delete: if false; }
     match /collections/{docId} { allow read: if isSales() || isFinance() || isGeneralManager(); allow create, update: if isSales() || isFinance(); allow delete: if false; }
 
-    match /suppliers/{docId} { allow read: if isFinance() || isWarehouse() || isGeneralManager() || role() == 'sales_rep'; allow create, update: if isFinance() || isWarehouse(); allow delete: if false; }
-    match /purchaseInvoices/{docId} { allow read: if isFinance() || isWarehouse() || isGeneralManager() || role() == 'sales_rep'; allow create, update: if isFinance() || isWarehouse(); allow delete: if false; }
-    match /supplierDebts/{docId} { allow read: if isFinance() || isGeneralManager() || role() == 'sales_rep'; allow create, update: if isFinance(); allow delete: if false; }
+    match /suppliers/{docId} { allow read: if isFinance() || isWarehouse() || isGeneralManager(); allow create, update: if isFinance() || isWarehouse(); allow delete: if false; }
+    match /purchaseInvoices/{docId} { allow read: if isFinance() || isWarehouse() || isGeneralManager(); allow create, update: if isFinance() || isWarehouse(); allow delete: if false; }
+    match /supplierDebts/{docId} { allow read: if isFinance() || isGeneralManager(); allow create, update: if isFinance(); allow delete: if false; }
 
     match /cashDeliveries/{docId} { allow read: if isFinance() || role() == 'sales_rep' || isGeneralManager(); allow create: if isFinance() || role() == 'sales_rep'; allow update: if isFinance() || role() == 'sales_rep'; allow delete: if false; }
     match /internalTransfers/{docId} { allow read: if isActive(); allow create, update: if isFinance() || role() == 'sales_rep'; allow delete: if false; }
@@ -60,7 +83,7 @@ service cloud.firestore {
     match /vehicleExpenses/{docId} { allow read: if isFinance() || role() == 'sales_rep' || isGeneralManager(); allow create, update: if isFinance() || role() == 'sales_rep'; allow delete: if false; }
 
     match /systemLogs/{docId} {
-      allow read: if isSuperuser() || isGeneralManager() || role() == 'sales_rep';
+      allow read: if isSuperuser() || isGeneralManager();
       allow create: if signedIn();
       allow update, delete: if false;
     }

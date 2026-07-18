@@ -2,10 +2,19 @@ import { erp } from './firebase.js';
 import { $, esc, money, qty, number, uid, todayISO, getFormData, toast, table, statusBadge, lineBuilder, exportExcel, renderTabs, attachTabs, printHtmlPdf } from './utils.js';
 
 export async function renderSales(root, user) {
-  const [items, customers, reps, invoices, debts, collections] = await Promise.all([
-    erp.list(`items`), erp.list(`customers`), erp.list(`users`), erp.list(`salesInvoices`), erp.list(`customerDebts`), erp.list(`collections`)
+  const isRep = user.role === `sales_rep`;
+  const [items, rawCustomers, reps, rawInvoices, rawDebts, collections] = await Promise.all([
+    erp.safeList(`items`),
+    erp.safeList(`customers`),
+    isRep ? erp.userDirectory() : erp.safeList(`users`),
+    isRep ? erp.safeList(`salesInvoices`, { where:[[ `sellerId`, `==`, user.id ]] }) : erp.safeList(`salesInvoices`),
+    isRep ? erp.safeList(`customerDebts`, { where:[[ `repId`, `==`, user.id ]] }) : erp.safeList(`customerDebts`),
+    erp.safeList(`collections`)
   ]);
-  const tabs = user.role === `sales_rep`
+  const customers = isRep ? rawCustomers.filter(c => !c.responsibleRepId || c.responsibleRepId === user.id) : rawCustomers;
+  const invoices = isRep ? rawInvoices.filter(i => i.sellerId === user.id) : rawInvoices;
+  const debts = isRep ? rawDebts.filter(d => d.repId === user.id) : rawDebts;
+  const tabs = isRep
     ? [{id:`invoice`,label:`بيع نقدي`},{id:`myReport`,label:`بيعي بالصنف`},{id:`history`,label:`فواتيري`}]
     : [{id:`invoice`,label:`فاتورة بيع`},{id:`customers`,label:`العملاء`},{id:`debts`,label:`ذمم العملاء`},{id:`myReport`,label:`البيع بالصنف`},{id:`history`,label:`الفواتير`}];
   root.innerHTML = `<section class="card">${renderTabs(tabs,`invoice`)}
@@ -25,9 +34,11 @@ export async function renderSales(root, user) {
 
 function filteredSales(invoices, user) { return user.role === `sales_rep` ? invoices.filter(i => i.sellerId === user.id) : invoices; }
 function invoicePanel(customers, reps, user){
-  const sellers = user.role === `sales_rep` ? reps.filter(r=>r.id===user.id) : reps.filter(u=>[`sales_rep`,`dawood`,`moatasem`,`admin`].includes(u.role));
+  let sellers = user.role === `sales_rep` ? reps.filter(r=>r.id===user.id) : reps.filter(u=>[`sales_rep`,`dawood`,`moatasem`,`admin`].includes(u.role));
+  if (user.role === `sales_rep` && !sellers.length) sellers = [user];
   const cashOnly = user.role === `sales_rep`;
-  return `<div class="hint">${cashOnly ? `واجهة المندوب مختصرة للبيع النقدي فقط.` : `يمكن للـ Superuser تسجيل النقدي أو الآجل.`}</div><form id="salesForm" class="form-grid">
+  const missingHint = !customers.length ? `<div class="empty">لا يوجد عملاء معرفون لك حتى الآن. اطلب من داود أو معتصم تعريف العملاء وربطهم بك.</div>` : ``;
+  return `${missingHint}<div class="hint">${cashOnly ? `واجهة المندوب مختصرة للبيع النقدي فقط.` : `يمكن للـ Superuser تسجيل النقدي أو الآجل.`}</div><form id="salesForm" class="form-grid">
     <label>رقم الفاتورة<input name="invoiceNumber" value="${uid(`SAL`)}" readonly></label>
     <label>التاريخ<input name="date" type="date" value="${todayISO()}"></label>
     <label>البائع<select name="sellerId" required>${sellers.map(r=>`<option value="${esc(r.id)}" ${user.id===r.id?`selected`:``}>${esc(r.fullName)}</option>`).join(``)}</select></label>

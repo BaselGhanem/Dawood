@@ -19,7 +19,7 @@ export async function renderAdmin(root, user) {
 }
 
 function usersPanel(users){
-  return `<div class="actions"><button class="btn primary" id="newUserBtn">إضافة مستخدم دخول</button><button class="btn" id="exportUsersBtn">تصدير المستخدمين</button></div><br>${table([
+  return `<div class="actions"><button class="btn primary" id="newUserBtn">إضافة مستخدم دخول</button><button class="btn" id="syncDirectoryBtn">مزامنة دليل المستخدمين</button><button class="btn" id="exportUsersBtn">تصدير المستخدمين</button></div><br>${table([
     {label:`الاسم`,value:`fullName`},{label:`البريد`,value:`email`},{label:`اسم المستخدم`,value:`username`},{label:`الدور`,value:r=>roleLabel(r.role)},
     {label:`الراتب`,value:r=>money(r.normalMonthlySalary)},{label:`النقد`,value:r=>money(r.cashBalance)},{label:`CliQ`,value:r=>money(r.cliqBalance)},
     {label:`السلف`,value:r=>money(r.advancesBalance)},{label:`رصيد الراتب`,value:r=>money(r.salaryBalance)},{label:`الحالة`,value:r=>statusBadge(r.status)},
@@ -53,7 +53,8 @@ function bindAdmin(root, users){
   root.addEventListener(`click`,async e=>{
     if(e.target.closest(`#newUserBtn`)) showUser();
     const edit=e.target.closest(`[data-edit-user]`); if(edit) showUser(await erp.get(`users`,edit.dataset.editUser));
-    const dis=e.target.closest(`[data-disable-user]`); if(dis){ await erp.update(`users`,dis.dataset.disableUser,{status:`inactive`}); toast(`تم تعطيل المستخدم`); location.reload(); }
+    const dis=e.target.closest(`[data-disable-user]`); if(dis){ const oldUser=await erp.get(`users`,dis.dataset.disableUser); await erp.update(`users`,dis.dataset.disableUser,{status:`inactive`}); if(oldUser) await erp.setUserDirectory({...oldUser,status:`inactive`}); toast(`تم تعطيل المستخدم`); location.reload(); }
+    if(e.target.closest(`#syncDirectoryBtn`)){ await erp.syncUserDirectory(await erp.list(`users`,{includeDeleted:true})); toast(`تمت مزامنة دليل المستخدمين للواجهات المحدودة`); location.reload(); }
     if(e.target.closest(`#exportUsersBtn`)) exportExcel(`users.xls`, await erp.list(`users`,{includeDeleted:true}));
     if(e.target.closest(`#exportLogsBtn`)) exportExcel(`system-logs.xls`, await erp.list(`systemLogs`,{includeDeleted:true}));
   });
@@ -83,11 +84,14 @@ function bindAdmin(root, users){
         id=await createAuthUserViaRest(payload.email,d.password);
         await erp.add(`users`,{id,...payload},true);
         await erp.setLoginAlias(payload.username,payload.email,id);
+        await erp.setUserDirectory({id,...payload});
       } else if(id) {
         await erp.update(`users`,id,payload);
         await erp.setLoginAlias(payload.username,payload.email,id);
+        await erp.setUserDirectory({id,...payload});
       } else {
-        await erp.add(`users`,{...payload,localPassword:d.password});
+        const localUser=await erp.add(`users`,{...payload,localPassword:d.password});
+        await erp.setUserDirectory(localUser);
       }
       wrap.remove(); toast(`تم حفظ المستخدم وصلاحياته`); location.reload();
     }}]);
