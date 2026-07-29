@@ -247,10 +247,10 @@ export const erp = {
   async getProfile(uidValue, email) {
     if (firebaseState.mode !== `firebase`) return firebaseState.profile;
     const byId = await getDoc(doc(firebaseState.db, `users`, uidValue));
-    if (byId.exists()) return { id: byId.id, ...byId.data() };
+    if (byId.exists()) return { ...byId.data(), id: byId.id };
     const q = query(collection(firebaseState.db, `users`), where(`email`, `==`, email), limit(1));
     const snap = await getDocs(q);
-    if (!snap.empty) return { id: snap.docs[0].id, ...snap.docs[0].data() };
+    if (!snap.empty) return { ...snap.docs[0].data(), id: snap.docs[0].id };
     return null;
   },
   async list(collectionName, options = {}) {
@@ -260,7 +260,7 @@ export const erp = {
       if (options.where) for (const clause of options.where) clauses.push(where(...clause));
       if (options.orderBy) clauses.push(orderBy(...options.orderBy));
       const snap = await getDocs(clauses.length ? query(ref, ...clauses) : ref);
-      return snap.docs.map(d => ({ id:d.id, ...d.data() })).filter(d => options.includeDeleted || d.status !== `deleted`);
+      return snap.docs.map(d => ({ ...d.data(), id:d.id })).filter(d => options.includeDeleted || d.status !== `deleted`);
     }
     const store = readLocalStore();
     let rows = clone(store[collectionName] || []);
@@ -276,16 +276,17 @@ export const erp = {
     if (!id) return null;
     if (firebaseState.mode === `firebase` && firebaseState.db) {
       const snap = await getDoc(doc(firebaseState.db, collectionName, id));
-      return snap.exists() ? { id:snap.id, ...snap.data() } : null;
+      return snap.exists() ? { ...snap.data(), id:snap.id } : null;
     }
     return (readLocalStore()[collectionName] || []).find(row => row.id === id) || null;
   },
   async add(collectionName, payload, audit = true) {
     const user = firebaseState.profile || {};
-    const data = { ...payload, status:payload.status || `active`, createdAt:payload.createdAt || nowISO(), createdBy:payload.createdBy || user.id || user.uid || `system`, updatedAt:nowISO(), updatedBy:user.id || user.uid || `system` };
-    let id = payload.id || uid(collectionName.slice(0, 4));
+    const { id: requestedId, ...payloadData } = payload || {};
+    const data = { ...payloadData, status:payloadData.status || `active`, createdAt:payloadData.createdAt || nowISO(), createdBy:payloadData.createdBy || user.id || user.uid || `system`, updatedAt:nowISO(), updatedBy:user.id || user.uid || `system` };
+    let id = requestedId || uid(collectionName.slice(0, 4));
     if (firebaseState.mode === `firebase` && firebaseState.db) {
-      if (payload.id) { await setDoc(doc(firebaseState.db, collectionName, payload.id), { ...data, createdAt: serverTimestamp(), updatedAt: serverTimestamp() }); }
+      if (requestedId) { await setDoc(doc(firebaseState.db, collectionName, requestedId), { ...data, createdAt: serverTimestamp(), updatedAt: serverTimestamp() }); }
       else { const ref = await addDoc(collection(firebaseState.db, collectionName), { ...data, createdAt: serverTimestamp(), updatedAt: serverTimestamp() }); id = ref.id; }
     } else {
       const store = readLocalStore();
@@ -296,12 +297,13 @@ export const erp = {
       writeLocalStore(store);
     }
     if (audit) await logAction(`add`, collectionName, id, null, data, `إضافة سجل`);
-    return { id, ...data };
+    return { ...data, id };
   },
   async update(collectionName, id, patch, audit = true) {
     const oldValue = await this.get(collectionName, id);
     const user = firebaseState.profile || {};
-    const data = { ...patch, updatedAt:nowISO(), updatedBy:user.id || user.uid || `system` };
+    const { id: _ignoredId, ...patchData } = patch || {};
+    const data = { ...patchData, updatedAt:nowISO(), updatedBy:user.id || user.uid || `system` };
     if (firebaseState.mode === `firebase` && firebaseState.db) await updateDoc(doc(firebaseState.db, collectionName, id), { ...data, updatedAt: serverTimestamp() });
     else {
       const store = readLocalStore();
@@ -311,7 +313,7 @@ export const erp = {
       writeLocalStore(store);
     }
     if (audit) await logAction(`edit`, collectionName, id, oldValue, data, `تعديل سجل`);
-    return { id, ...data };
+    return { ...data, id };
   },
   async softDelete(collectionName, id) {
     return this.update(collectionName, id, { status:`deleted`, deletedAt:nowISO() }, true);
