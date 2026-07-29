@@ -70,13 +70,16 @@ function bindInvoice(root, items, customers, reps, user){
   $(`#confirmSaleBtn`,root)?.addEventListener(`click`,()=>saveSale(`confirmed`));
   $(`#draftSaleBtn`,root)?.addEventListener(`click`,()=>saveSale(`draft`));
   async function saveSale(status){
-    const form=$(`#salesForm`,root); if(!form.reportValidity()) return; if(!lines.length) return toast(`أدخل صنفاً واحداً على الأقل`,`err`);
+    try {
+      const form=$(`#salesForm`,root); if(!form.reportValidity()) return; if(!lines.length) return toast(`أدخل صنفاً واحداً على الأقل`,`err`);
     const d=getFormData(form); if(user.role===`sales_rep`) d.saleType=`cash`;
     const seller=await erp.get(`users`,d.sellerId); if(!seller) return toast(`البائع غير موجود`,`err`);
     const warehouseId=seller.assignedWarehouseId || `main`;
     let total=0;
     for(const line of lines){
-      const item=await erp.get(`items`,line.itemId); const available=number(item.stock?.[warehouseId]);
+      const item=await erp.get(`items`,line.itemId);
+      if(!item) throw new Error(`تعذر العثور على الصنف المحدد. أعد تحميل الصفحة واختر الصنف من جديد.`);
+      const available=number(item.stock?.[warehouseId]);
       if(status===`confirmed` && available<number(line.quantity)) throw new Error(`رصيد غير كاف من ${item.itemName} في مستودع البائع`);
       total += number(line.quantity)*number(line.price);
     }
@@ -94,7 +97,11 @@ function bindInvoice(root, items, customers, reps, user){
         await erp.update(`customers`,d.customerId,{currentBalance:number(customer?.currentBalance)+remaining});
       }
     }
-    toast(status===`draft`?`تم حفظ الفاتورة كمسودة`:`تم اعتماد الفاتورة`); location.reload();
+      toast(status===`draft`?`تم حفظ الفاتورة كمسودة`:`تم اعتماد الفاتورة`); location.reload();
+    } catch(error) {
+      console.error(`تعذر حفظ فاتورة البيع.`, error);
+      toast(error?.message || `تعذر حفظ فاتورة البيع. حاول مرة أخرى.`, `err`);
+    }
   }
 }
 function bindCustomers(root,reps,user, ctx){
