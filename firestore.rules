@@ -18,6 +18,14 @@ service cloud.firestore {
     function affectedOnly(keys) { return request.resource.data.diff(resource.data).affectedKeys().hasOnly(keys); }
     function safeOwnLoginPatch(userId) { return (ownsUser(userId) || ownEmail()) && affectedOnly(['lastLogin','updatedAt','updatedBy']); }
     function safeFinancialPatch() { return isActive() && affectedOnly(['cashBalance','cliqBalance','advancesBalance','salaryBalance','lastLogin','updatedAt','updatedBy']); }
+    function safeOwnVehicleStockPatch() {
+      return role() == 'sales_rep'
+        && userDoc().data.assignedWarehouseId != null
+        && affectedOnly(['stock','updatedAt','updatedBy'])
+        && request.resource.data.updatedBy == request.auth.uid
+        && request.resource.data.stock.diff(resource.data.stock).affectedKeys().hasOnly([userDoc().data.assignedWarehouseId])
+        && request.resource.data.stock[userDoc().data.assignedWarehouseId] >= 0;
+    }
     function directoryKeys() { return ['id','fullName','username','email','role','status','assignedWarehouseId','createdAt','createdBy','updatedAt','updatedBy']; }
     function safeOwnDirectoryCreate(userId) {
       return ownsUser(userId)
@@ -60,7 +68,12 @@ service cloud.firestore {
     match /permissions/{docId} { allow read: if signedIn(); allow write: if isSuperuser(); }
 
     match /warehouses/{docId} { allow read: if isActive(); allow write: if isWarehouse(); allow delete: if false; }
-    match /items/{docId} { allow read: if isActive(); allow write: if isWarehouse(); allow delete: if false; }
+    match /items/{docId} {
+      allow read: if isActive();
+      allow create: if isWarehouse();
+      allow update: if isWarehouse() || safeOwnVehicleStockPatch();
+      allow delete: if false;
+    }
     match /inventoryMovements/{docId} { allow read: if isActive(); allow create, update: if isWarehouse() || role() == 'sales_rep'; allow delete: if false; }
     match /stockCounts/{docId} { allow read: if isActive(); allow create, update: if isWarehouse() || isFinance(); allow delete: if false; }
 
