@@ -74,7 +74,8 @@ function bindInvoice(root, items, customers, reps, user){
       const form=$(`#salesForm`,root); if(!form.reportValidity()) return; if(!lines.length) return toast(`أدخل صنفاً واحداً على الأقل`,`err`);
     const d=getFormData(form); if(user.role===`sales_rep`) d.saleType=`cash`;
     const seller=await erp.get(`users`,d.sellerId); if(!seller) return toast(`البائع غير موجود`,`err`);
-    const warehouseId=seller.assignedWarehouseId || `main`;
+    const warehouseId=seller.role===`sales_rep` ? seller.assignedWarehouseId : `main`;
+    if(seller.role===`sales_rep` && !warehouseId) throw new Error(`لا توجد سيارة مرتبطة بالمندوب ${seller.fullName || seller.username}. احفظ بيانات المندوب من إدارة المستخدمين لإنشاء السيارة تلقائياً.`);
     let total=0;
     for(const line of lines){
       const item=await erp.get(`items`,line.itemId);

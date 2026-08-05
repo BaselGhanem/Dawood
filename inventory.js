@@ -3,17 +3,37 @@ import { $, esc, money, qty, number, uid, todayISO, getFormData, toast, confirmM
 import { can } from './permissions.js';
 
 const cats = { raw_material:`مواد خام`, manufactured:`منتجات مصنّعة`, ready_goods:`بضاعة جاهزة`, tools:`عدد وأدوات`, maintenance:`صيانة`, miscellaneous:`متفرقات` };
+const MAIN_WAREHOUSE_ID = `main`;
+function mainWarehouse(warehouses) {
+  return warehouses.find(warehouse => warehouse.id === MAIN_WAREHOUSE_ID) || warehouses.find(warehouse => warehouse.type === `main`) || null;
+}
+function vehicleWarehouseForRep(rep, warehouses) {
+  if (!rep) return null;
+  return warehouses.find(warehouse => warehouse.type === `vehicle` && warehouse.id === rep.assignedWarehouseId)
+    || warehouses.find(warehouse => warehouse.type === `vehicle` && warehouse.assignedRepId === rep.id)
+    || null;
+}
+function requireVehicleWarehouse(repId, reps, warehouses) {
+  const rep = reps.find(row => row.id === repId);
+  if (!rep) throw new Error(`المندوب غير موجود.`);
+  const warehouse = vehicleWarehouseForRep(rep, warehouses);
+  if (!warehouse) throw new Error(`لا توجد سيارة مرتبطة بالمندوب ${rep.fullName || rep.username}. افتح إدارة المستخدمين واحفظ بيانات المندوب لإنشاء السيارة تلقائياً.`);
+  return { rep, warehouse };
+}
 export async function renderWarehouse(root, user) {
-  const [items, warehouses, directory, movements] = await Promise.all([erp.safeList(`items`), erp.safeList(`warehouses`), erp.userDirectory(), erp.safeList(`inventoryMovements`, { includeDeleted:true })]);
-  const reps = directory.filter(u => u.role === `sales_rep`);
+  const [items, allWarehouses, directory, movements] = await Promise.all([erp.safeList(`items`), erp.safeList(`warehouses`), erp.userDirectory(), erp.safeList(`inventoryMovements`, { includeDeleted:true })]);
+  const primaryWarehouse = mainWarehouse(allWarehouses);
+  const warehouses = allWarehouses.filter(warehouse => warehouse.type !== `main` || warehouse.id === primaryWarehouse?.id);
+  const reps = directory.filter(u => u.role === `sales_rep` && u.status !== `inactive` && u.status !== `deleted`);
   movements.sort((a,b) => String(b.date || b.createdAt || ``).localeCompare(String(a.date || a.createdAt || ``)));
   root.innerHTML = `<section class="card">
-    ${renderTabs([{id:`stock`,label:`الرصيد`},{id:`movement`,label:`حركة مخزون`},{id:`warehouseCount`,label:`تعديل جرد مستودع`},{id:`loading`,label:`تحميل سيارة`},{id:`returns`,label:`إرجاع بضاعة`},{id:`count`,label:`جرد سيارة`}], `stock`)}
+    ${renderTabs([{id:`stock`,label:`الرصيد`},{id:`movement`,label:`حركة مخزون`},{id:`warehouseCount`,label:`تعديل جرد الرئيسي`},{id:`loading`,label:`تحميل مندوب`},{id:`repTransfer`,label:`نقل بين المندوبين`},{id:`returns`,label:`إرجاع من مندوب`},{id:`count`,label:`جرد المندوب`}], `stock`)}
     <div class="panel active" data-panel="stock">${stockPanel(items, warehouses, user)}</div>
     <div class="panel" data-panel="movement">${movementPanel(items, warehouses, movements)}</div>
     <div class="panel" data-panel="warehouseCount">${warehouseCountPanel(items, warehouses)}</div>
     <div class="panel" data-panel="loading">${loadingPanel(items, warehouses, reps)}</div>
-    <div class="panel" data-panel="returns">${returnsPanel(items, warehouses)}</div>
+    <div class="panel" data-panel="repTransfer">${repTransferPanel(items, warehouses, reps)}</div>
+    <div class="panel" data-panel="returns">${returnsPanel(items, warehouses, reps)}</div>
     <div class="panel" data-panel="count">${countPanel(items, warehouses, reps)}</div>
   </section>`;
   attachTabs(root);
@@ -21,11 +41,12 @@ export async function renderWarehouse(root, user) {
   bindMovement(root, items, warehouses, user);
   bindWarehouseCount(root, items, user);
   bindLoading(root, items, warehouses, user);
-  bindReturns(root, user);
+  bindRepTransfer(root, items, warehouses, reps, user);
+  bindReturns(root, warehouses, reps, user);
   bindCount(root, items, warehouses, reps);
 }
 function stockPanel(items, warehouses, user) {
-  return `<div class="actions"><button class="btn primary" id="newItemBtn">إضافة صنف</button><button class="btn" id="newWarehouseBtn">إضافة مستودع</button><button class="btn" id="exportStockBtn">تصدير الرصيد</button></div><br>${table([
+  return `<div class="actions"><button class="btn primary" id="newItemBtn">إضافة صنف</button><button class="btn" id="exportStockBtn">تصدير الرصيد</button></div><p class="hint">يوجد مستودع رئيسي واحد فقط، ولكل مندوب سيارة مرتبطة تلقائياً بحسابه.</p><br>${table([
     {label:`الكود`, value:`itemCode`}, {label:`الصنف`, value:`itemName`}, {label:`الفئة`, value:r=>esc(cats[r.category]||r.category)}, {label:`الوحدة`, value:`unit`},
     {label:`تكلفة`, value:r=>money(r.costPrice)}, {label:`سعر بيع`, value:r=>money(r.standardSellingPrice)}, {label:`الحد الأدنى`, value:r=>qty(r.minimumStock)},
     ...warehouses.map(w => ({ label:w.warehouseName, value:r=>qty((r.stock||{})[w.id]||0) })),
@@ -34,16 +55,11 @@ function stockPanel(items, warehouses, user) {
   ], items, `لا توجد أصناف`)}</div>`;
 }
 function itemForm(item = {}, warehouses = []) {
-  const openingWarehouseOptions = [...warehouses]
-    .sort((a,b) => Number(b.type === `main`) - Number(a.type === `main`))
-    .map(w => `<option value="${esc(w.id)}">${esc(w.warehouseName)}</option>`)
-    .join(``);
+  const main = mainWarehouse(warehouses);
   const openingStockFields = item.id
     ? `<p class="hint wide">لتعديل رصيد صنف موجود استخدم تبويب «حركة مخزون» حتى تُسجّل الحركة في كشف المخزون.</p>`
-    : `<label>مستودع الرصيد الافتتاحي<select name="openingWarehouseId" ${openingWarehouseOptions ? `required` : `disabled`}>
-        ${openingWarehouseOptions || `<option value="">أضف مستودعاً أولاً</option>`}
-      </select></label>
-      <label>الرصيد الافتتاحي<input type="number" step="0.001" min="0" name="openingBalance" value="0" ${openingWarehouseOptions ? `` : `disabled`}></label>`;
+    : `<input type="hidden" name="openingWarehouseId" value="${esc(main?.id || MAIN_WAREHOUSE_ID)}">
+      <label>الرصيد الافتتاحي في المستودع الرئيسي<input type="number" step="0.001" min="0" name="openingBalance" value="0" ${main ? `` : `disabled`}></label>`;
   return `<form id="itemForm" class="form-grid">
     <input type="hidden" name="id" value="${esc(item.id||``)}">
     <label>كود الصنف<input name="itemCode" required value="${esc(item.itemCode||``)}"></label>
@@ -60,6 +76,7 @@ function itemForm(item = {}, warehouses = []) {
   </form>`;
 }
 function movementPanel(items, warehouses, movements) {
+  const main = mainWarehouse(warehouses);
   const rows = movements.slice(0,500).map(movement => ({
     ...movement,
     itemName:items.find(item => item.id === movement.itemId)?.itemName || movement.itemId || `—`,
@@ -76,10 +93,10 @@ function movementPanel(items, warehouses, movements) {
     {label:`المرجع`,value:r=>esc(r.documentNumber || r.movementNumber || `—`)},
     {label:`ملاحظات`,value:r=>esc(r.notes || r.reason || `—`)}
   ], rows, `لا توجد حركات مخزون`);
-  return `<form id="movementForm" class="form-grid"><label>التاريخ<input name="date" type="date" value="${todayISO()}"></label><label>نوع الحركة<select name="type"><option value="receive">استلام للمستودع</option><option value="transfer">تحويل بين مستودعات</option><option value="damage">تالف / شطب</option></select></label><label>من مستودع<select name="fromWarehouseId"><option value="">لا يوجد</option>${warehouses.map(w=>`<option value="${esc(w.id)}">${esc(w.warehouseName)}</option>`).join(``)}</select></label><label>إلى مستودع<select name="toWarehouseId"><option value="">لا يوجد</option>${warehouses.map(w=>`<option value="${esc(w.id)}">${esc(w.warehouseName)}</option>`).join(``)}</select></label><label>الصنف<select name="itemId" required>${items.map(i=>`<option value="${esc(i.id)}">${esc(i.itemCode)} - ${esc(i.itemName)}</option>`).join(``)}</select></label><label>الكمية<input name="quantity" type="number" min="0.001" step="0.001" required></label><label class="wide">سبب الحركة<textarea name="notes" required></textarea></label><button class="btn primary" type="submit">حفظ حركة المخزون</button></form><h3 style="margin-top:24px">سجل حركات المخزون</h3>${movementTable}`;
+  return `<form id="movementForm" class="form-grid"><input type="hidden" name="warehouseId" value="${esc(main?.id || MAIN_WAREHOUSE_ID)}"><label>التاريخ<input name="date" type="date" value="${todayISO()}"></label><label>نوع الحركة<select name="type"><option value="receive">استلام إلى المستودع الرئيسي</option><option value="damage">تالف / شطب من المستودع الرئيسي</option></select></label><label>الصنف<select name="itemId" required>${items.map(i=>`<option value="${esc(i.id)}">${esc(i.itemCode)} - ${esc(i.itemName)}</option>`).join(``)}</select></label><label>الكمية<input name="quantity" type="number" min="0.001" step="0.001" required></label><label class="wide">سبب الحركة<textarea name="notes" required></textarea></label><button class="btn primary" type="submit" ${!main || !items.length ? `disabled` : ``}>حفظ حركة المخزون</button></form><h3 style="margin-top:24px">سجل حركات المخزون</h3>${movementTable}`;
 }
 function movementTypeLabel(type, reason) {
-  const labels = { stock_adjust:`Stock Adjust - تعديل جرد`, stock_transfer:`تحويل مخزون`, vehicle_load:`تحميل سيارة`, vehicle_return:`إرجاع من سيارة`, opening_balance:`رصيد افتتاحي`, warehouse_count_adjustment:`Stock Adjust - تعديل جرد` };
+  const labels = { stock_adjust:`Stock Adjust - تعديل جرد`, stock_transfer:`تحويل مخزون`, rep_to_rep_transfer:`نقل بين المندوبين`, vehicle_load:`تحميل مندوب`, vehicle_return:`إرجاع من مندوب`, warehouse_receive:`استلام للمستودع الرئيسي`, damage:`تالف / شطب`, opening_balance:`رصيد افتتاحي`, warehouse_count_adjustment:`Stock Adjust - تعديل جرد` };
   return labels[type] || reason || type || `حركة مخزون`;
 }
 function movementDate(value) {
@@ -88,21 +105,25 @@ function movementDate(value) {
   return String(value || `—`);
 }
 function loadingPanel(items, warehouses, reps) {
-  const vehicle = warehouses.filter(w=>w.type===`vehicle`);
-  const sources = warehouses.filter(w=>w.type!==`vehicle`);
-  const firstBalance = number(items[0]?.stock?.[sources[0]?.id]);
-  return `<form id="loadingForm" class="form-grid"><label>رقم التحميل<input name="loadingNumber" value="${uid(`LOAD`)}" readonly></label><label>التاريخ<input name="date" type="date" value="${todayISO()}"></label><label>المندوب<select name="repId" required>${reps.map(r=>`<option value="${esc(r.id)}">${esc(r.fullName)}</option>`).join(``)}</select></label><label>من مستودع<select name="fromWarehouseId" required>${sources.map(w=>`<option value="${esc(w.id)}">${esc(w.warehouseName)}</option>`).join(``)}</select></label><label>سيارة المندوب<select name="vehicleWarehouseId" required>${vehicle.map(w=>`<option value="${esc(w.id)}">${esc(w.warehouseName)}</option>`).join(``)}</select></label><label>الصنف<select name="itemId" required>${items.map(i=>`<option value="${esc(i.id)}">${esc(i.itemCode)} - ${esc(i.itemName)}</option>`).join(``)}</select></label><label>الرصيد المتاح<input id="loadingAvailableStock" value="${firstBalance}" readonly></label><label>الكمية<input name="quantity" type="number" min="0.001" max="${firstBalance}" step="0.001" required></label><label class="wide">ملاحظات<textarea name="notes"></textarea></label><button class="btn primary" type="submit" ${!items.length || !sources.length || !vehicle.length ? `disabled` : ``}>اعتماد التحميل</button></form>`;
+  const main = mainWarehouse(warehouses);
+  const firstBalance = number(items[0]?.stock?.[main?.id]);
+  return `<form id="loadingForm" class="form-grid"><label>رقم التحميل<input name="loadingNumber" value="${uid(`LOAD`)}" readonly></label><label>التاريخ<input name="date" type="date" value="${todayISO()}"></label><label>المندوب<select name="repId" required>${reps.map(r=>`<option value="${esc(r.id)}">${esc(r.fullName)}</option>`).join(``)}</select></label><label>المصدر<input value="المستودع الرئيسي" readonly></label><label>الصنف<select name="itemId" required>${items.map(i=>`<option value="${esc(i.id)}">${esc(i.itemCode)} - ${esc(i.itemName)}</option>`).join(``)}</select></label><label>الرصيد المتاح في الرئيسي<input id="loadingAvailableStock" value="${firstBalance}" readonly></label><label>الكمية<input name="quantity" type="number" min="0.001" max="${firstBalance}" step="0.001" required></label><label class="wide">ملاحظات<textarea name="notes"></textarea></label><button class="btn primary" type="submit" ${!items.length || !main || !reps.length ? `disabled` : ``}>اعتماد التحميل</button></form>`;
 }
-function returnsPanel(items, warehouses) {
-  return `<form id="returnForm" class="form-grid"><label>التاريخ<input name="date" type="date" value="${todayISO()}"></label><label>من سيارة<select name="fromWarehouseId" required>${warehouses.filter(w=>w.type===`vehicle`).map(w=>`<option value="${esc(w.id)}">${esc(w.warehouseName)}</option>`).join(``)}</select></label><label>إلى مستودع<select name="toWarehouseId" required>${warehouses.filter(w=>w.type===`main`).map(w=>`<option value="${esc(w.id)}">${esc(w.warehouseName)}</option>`).join(``)}</select></label><label>سبب الإرجاع<select name="reason"><option>بضاعة بطيئة الحركة</option><option>رصيد زائد في السيارة</option><option>تحميل خاطئ</option><option>إرجاع نهاية فترة</option><option>تالف</option><option>أخرى</option></select></label><label>الصنف<select name="itemId" required>${items.map(i=>`<option value="${esc(i.id)}">${esc(i.itemCode)} - ${esc(i.itemName)}</option>`).join(``)}</select></label><label>الكمية<input name="quantity" type="number" min="0.001" step="0.001" required></label><label class="wide">ملاحظات<textarea name="notes"></textarea></label><button class="btn primary" type="submit">اعتماد الإرجاع</button></form>`;
+function repTransferPanel(items, warehouses, reps) {
+  return `<form id="repTransferForm" class="form-grid"><label>التاريخ<input name="date" type="date" value="${todayISO()}" required></label><label>من المندوب<select name="fromRepId" required>${reps.map(rep=>`<option value="${esc(rep.id)}">${esc(rep.fullName)}</option>`).join(``)}</select></label><label>إلى المندوب<select name="toRepId" required>${reps.map(rep=>`<option value="${esc(rep.id)}">${esc(rep.fullName)}</option>`).join(``)}</select></label><label>الصنف<select name="itemId" required>${items.map(item=>`<option value="${esc(item.id)}">${esc(item.itemCode)} - ${esc(item.itemName)}</option>`).join(``)}</select></label><label>رصيد المندوب المرسل<input id="repTransferAvailableStock" readonly></label><label>الكمية<input name="quantity" type="number" min="0.001" step="0.001" required></label><label class="wide">ملاحظات<textarea name="notes" required></textarea></label><button class="btn primary" type="submit" ${reps.length < 2 || !items.length ? `disabled` : ``}>نقل البضاعة</button></form>`;
+}
+function returnsPanel(items, warehouses, reps) {
+  const main = mainWarehouse(warehouses);
+  return `<form id="returnForm" class="form-grid"><label>التاريخ<input name="date" type="date" value="${todayISO()}"></label><label>المندوب<select name="repId" required>${reps.map(rep=>`<option value="${esc(rep.id)}">${esc(rep.fullName)}</option>`).join(``)}</select></label><label>الوجهة<input value="المستودع الرئيسي" readonly></label><label>سبب الإرجاع<select name="reason"><option>بضاعة بطيئة الحركة</option><option>رصيد زائد في السيارة</option><option>تحميل خاطئ</option><option>إرجاع نهاية فترة</option><option>تالف</option><option>أخرى</option></select></label><label>الصنف<select name="itemId" required>${items.map(i=>`<option value="${esc(i.id)}">${esc(i.itemCode)} - ${esc(i.itemName)}</option>`).join(``)}</select></label><label>الكمية<input name="quantity" type="number" min="0.001" step="0.001" required></label><label class="wide">ملاحظات<textarea name="notes"></textarea></label><button class="btn primary" type="submit" ${!main || !reps.length || !items.length ? `disabled` : ``}>اعتماد الإرجاع</button></form>`;
 }
 function warehouseCountPanel(items, warehouses) {
   const firstItem = items[0];
-  const firstWarehouse = warehouses[0];
+  const firstWarehouse = mainWarehouse(warehouses);
   const currentBalance = number(firstItem?.stock?.[firstWarehouse?.id]);
   return `<form id="warehouseCountForm" class="form-grid">
     <label>تاريخ الجرد<input name="countDate" type="date" value="${todayISO()}" required></label>
-    <label>المستودع<select name="warehouseId" required>${warehouses.map(w=>`<option value="${esc(w.id)}">${esc(w.warehouseName)}</option>`).join(``)}</select></label>
+    <input type="hidden" name="warehouseId" value="${esc(firstWarehouse?.id || MAIN_WAREHOUSE_ID)}">
+    <label>المستودع<input value="المستودع الرئيسي" readonly></label>
     <label>الصنف<select name="itemId" required>${items.map(i=>`<option value="${esc(i.id)}">${esc(i.itemCode)} - ${esc(i.itemName)}</option>`).join(``)}</select></label>
     <label>الرصيد المسجّل<input id="warehouseCurrentStock" value="${currentBalance}" readonly></label>
     <label>الكمية الفعلية الجديدة<input name="actualQuantity" type="number" step="0.001" min="0" required></label>
@@ -112,16 +133,15 @@ function warehouseCountPanel(items, warehouses) {
 }
 
 function countPanel(items, warehouses, reps) {
-  return `<form id="countForm" class="form-grid"><label>تاريخ الجرد<input name="countDate" type="date" value="${todayISO()}"></label><label>المندوب<select name="repId" required>${reps.map(r=>`<option value="${esc(r.id)}">${esc(r.fullName)}</option>`).join(``)}</select></label><label>مستودع السيارة<select name="warehouseId" required>${warehouses.filter(w=>w.type===`vehicle`).map(w=>`<option value="${esc(w.id)}">${esc(w.warehouseName)}</option>`).join(``)}</select></label><label>الصنف<select name="itemId" required>${items.map(i=>`<option value="${esc(i.id)}">${esc(i.itemCode)} - ${esc(i.itemName)}</option>`).join(``)}</select></label><label>الكمية الفعلية<input name="actualQuantity" type="number" step="0.001" min="0" required></label><label class="wide">ملاحظات<textarea name="notes"></textarea></label><button class="btn primary" type="submit">حفظ الجرد واحتساب الفرق</button></form>`;
+  return `<form id="countForm" class="form-grid"><label>تاريخ الجرد<input name="countDate" type="date" value="${todayISO()}"></label><label>المندوب<select name="repId" required>${reps.map(r=>`<option value="${esc(r.id)}">${esc(r.fullName)}</option>`).join(``)}</select></label><label>الصنف<select name="itemId" required>${items.map(i=>`<option value="${esc(i.id)}">${esc(i.itemCode)} - ${esc(i.itemName)}</option>`).join(``)}</select></label><label>الكمية الفعلية<input name="actualQuantity" type="number" step="0.001" min="0" required></label><label class="wide">ملاحظات<textarea name="notes"></textarea></label><button class="btn primary" type="submit" ${!reps.length || !items.length ? `disabled` : ``}>حفظ الجرد واحتساب الفرق</button></form>`;
 }
 function bindStock(root, user, warehouses) {
-  root.addEventListener(`click`, async e => {
+  root.onclick = async e => {
     if (e.target.closest(`#newItemBtn`)) showItemModal();
     const edit = e.target.closest(`[data-edit-item]`); if (edit) showItemModal(await erp.get(`items`, edit.dataset.editItem));
     const del = e.target.closest(`[data-del-item]`); if (del) confirmModal(`سيتم حذف الصنف حذفاً ناعماً مع حفظ السجل.`, async()=>{ await erp.softDelete(`items`, del.dataset.delItem); toast(`تم حذف الصنف`); renderWarehouse(root, user); }, `حذف`);
     if (e.target.closest(`#exportStockBtn`)) exportExcel(`stock.xls`, await erp.list(`items`));
-    if (e.target.closest(`#newWarehouseBtn`)) showWarehouseModal(root, user);
-  });
+  };
   async function showItemModal(item={}) {
     const { modal } = await import('./utils.js');
     modal(item.id?`تعديل صنف`:`إضافة صنف`, itemForm(item, warehouses), [{label:`حفظ`, className:`primary`, handler:async wrap=>{
@@ -143,7 +163,6 @@ function bindStock(root, user, warehouses) {
     }}]);
   }
 }
-function showWarehouseModal(root,user){ import('./utils.js').then(({modal})=> modal(`إضافة مستودع`, `<form id="warehouseForm" class="form-grid two"><label>كود المستودع<input name="warehouseCode" required></label><label>اسم المستودع<input name="warehouseName" required></label><label>النوع<select name="type"><option value="main">رئيسي</option><option value="vehicle">سيارة مندوب</option></select></label><label>الحالة<select name="status"><option value="active">فعال</option><option value="inactive">غير فعال</option></select></label></form>`, [{label:`حفظ`, className:`primary`, handler:async wrap=>{const form=$(`#warehouseForm`,wrap); if(!form.reportValidity()) return; await erp.add(`warehouses`,getFormData(form)); wrap.remove(); toast(`تم حفظ المستودع`); renderWarehouse(root,user);}}])); }
 function bindMovement(root, items, warehouses, user) {
   const form = $(`#movementForm`, root);
   form?.addEventListener(`submit`, async e => {
@@ -155,17 +174,11 @@ function bindMovement(root, items, warehouses, user) {
     if (q <= 0) return toast(`الكمية غير صحيحة`, `err`);
     try {
       if (submitButton) submitButton.disabled = true;
-      const movement = { fromWarehouseId:d.fromWarehouseId, toWarehouseId:d.toWarehouseId, notes:d.notes };
+      const movement = { warehouseId:d.warehouseId, notes:d.notes, date:d.date };
       if (d.type === `receive`) {
-        if (!d.toWarehouseId) throw new Error(`اختر المستودع المستلم في حقل «إلى مستودع».`);
-        await erp.changeStock(d.itemId, d.toWarehouseId, q, `استلام للمستودع`, movement);
-      } else if (d.type === `transfer`) {
-        if (!d.fromWarehouseId || !d.toWarehouseId) throw new Error(`اختر مستودع المصدر ومستودع الوجهة.`);
-        if (d.fromWarehouseId === d.toWarehouseId) throw new Error(`يجب أن يختلف مستودع المصدر عن مستودع الوجهة.`);
-        await erp.transferStock(d.itemId, d.fromWarehouseId, d.toWarehouseId, q, `تحويل بين مستودعات`, { ...movement, type:`stock_transfer`, date:d.date });
+        await erp.changeStock(d.itemId, d.warehouseId, q, `استلام للمستودع الرئيسي`, { ...movement, type:`warehouse_receive` });
       } else if (d.type === `damage`) {
-        if (!d.fromWarehouseId) throw new Error(`اختر المستودع في حقل «من مستودع».`);
-        await erp.changeStock(d.itemId, d.fromWarehouseId, -q, `تالف / شطب`, movement);
+        await erp.changeStock(d.itemId, d.warehouseId, -q, `تالف / شطب من المستودع الرئيسي`, { ...movement, type:`damage` });
       } else {
         throw new Error(`نوع حركة المخزون غير معروف.`);
       }
@@ -235,13 +248,12 @@ function bindLoading(root, items, warehouses, user) {
   const refreshAvailable = () => {
     const d = getFormData(form);
     const item = items.find(row => row.id === d.itemId);
-    const available = number(item?.stock?.[d.fromWarehouseId]);
+    const available = number(item?.stock?.[mainWarehouse(warehouses)?.id]);
     availableInput.value = available;
     quantityInput.max = String(Math.max(0, available));
     quantityInput.setCustomValidity(number(quantityInput.value) > available ? `الكمية المطلوبة أكبر من الرصيد المتاح.` : ``);
   };
   form.elements.itemId?.addEventListener(`change`, refreshAvailable);
-  form.elements.fromWarehouseId?.addEventListener(`change`, refreshAvailable);
   quantityInput?.addEventListener(`input`, refreshAvailable);
   refreshAvailable();
   form.addEventListener(`submit`, async e => {
@@ -251,12 +263,17 @@ function bindLoading(root, items, warehouses, user) {
     const d = getFormData(form);
     const q = number(d.quantity);
     const item = items.find(row => row.id === d.itemId);
-    const available = number(item?.stock?.[d.fromWarehouseId]);
+    const source = mainWarehouse(warehouses);
+    if (!source) return toast(`المستودع الرئيسي غير موجود.`, `err`);
+    let vehicle;
+    try { vehicle = requireVehicleWarehouse(d.repId, await erp.userDirectory(), warehouses).warehouse; }
+    catch (error) { return toast(error.message, `err`); }
+    const available = number(item?.stock?.[source.id]);
     if (q > available + 0.0001) return toast(`لا يمكن تحميل ${item?.itemName || `الصنف`}. الرصيد المتاح ${available} فقط.`, `err`);
     try {
       if (submitButton) submitButton.disabled = true;
-      await erp.transferStock(d.itemId, d.fromWarehouseId, d.vehicleWarehouseId, q, `تحميل سيارة`, { type:`vehicle_load`, date:d.date, repId:d.repId, documentNumber:d.loadingNumber, notes:d.notes });
-      toast(`تم اعتماد التحميل ونقل الرصيد للسيارة`);
+      await erp.transferStock(d.itemId, source.id, vehicle.id, q, `تحميل المندوب`, { type:`vehicle_load`, date:d.date, repId:d.repId, documentNumber:d.loadingNumber, notes:d.notes });
+      toast(`تم اعتماد التحميل من المستودع الرئيسي إلى المندوب`);
       await renderWarehouse(root, user);
     } catch (error) {
       console.error(`تعذر تحميل السيارة.`, error);
@@ -266,7 +283,46 @@ function bindLoading(root, items, warehouses, user) {
     }
   });
 }
-function bindReturns(root, user) {
+function bindRepTransfer(root, items, warehouses, reps, user) {
+  const form = $(`#repTransferForm`, root);
+  if (!form) return;
+  const availableInput = $(`#repTransferAvailableStock`, form);
+  const refreshAvailable = () => {
+    const d = getFormData(form);
+    const item = items.find(row => row.id === d.itemId);
+    const warehouse = vehicleWarehouseForRep(reps.find(rep => rep.id === d.fromRepId), warehouses);
+    availableInput.value = number(item?.stock?.[warehouse?.id]);
+  };
+  form.elements.fromRepId?.addEventListener(`change`, refreshAvailable);
+  form.elements.itemId?.addEventListener(`change`, refreshAvailable);
+  refreshAvailable();
+  form.addEventListener(`submit`, async event => {
+    event.preventDefault();
+    const submitButton = event.submitter;
+    if (submitButton?.disabled || !form.reportValidity()) return;
+    const d = getFormData(form);
+    try {
+      if (d.fromRepId === d.toRepId) throw new Error(`اختر مندوباً مستلماً مختلفاً عن المندوب المرسل.`);
+      const source = requireVehicleWarehouse(d.fromRepId, reps, warehouses);
+      const destination = requireVehicleWarehouse(d.toRepId, reps, warehouses);
+      const q = number(d.quantity);
+      const item = items.find(row => row.id === d.itemId);
+      const available = number(item?.stock?.[source.warehouse.id]);
+      if (q <= 0) throw new Error(`الكمية غير صحيحة.`);
+      if (q > available + 0.0001) throw new Error(`لا يمكن نقل ${item?.itemName || `الصنف`}. رصيد ${source.rep.fullName} الحالي ${available} فقط.`);
+      if (submitButton) submitButton.disabled = true;
+      await erp.transferStock(d.itemId, source.warehouse.id, destination.warehouse.id, q, `نقل بضاعة بين المندوبين`, { type:`rep_to_rep_transfer`, date:d.date, fromRepId:d.fromRepId, toRepId:d.toRepId, notes:d.notes });
+      toast(`تم نقل البضاعة من ${source.rep.fullName} إلى ${destination.rep.fullName}`);
+      await renderWarehouse(root, user);
+    } catch (error) {
+      console.error(`تعذر نقل البضاعة بين المندوبين.`, error);
+      toast(error.message || `تعذر نقل البضاعة بين المندوبين`, `err`);
+    } finally {
+      if (submitButton?.isConnected) submitButton.disabled = false;
+    }
+  });
+}
+function bindReturns(root, warehouses, reps, user) {
   const form = $(`#returnForm`, root);
   form?.addEventListener(`submit`, async e => {
     e.preventDefault();
@@ -276,8 +332,11 @@ function bindReturns(root, user) {
     const q = number(d.quantity);
     try {
       if (submitButton) submitButton.disabled = true;
-      if (d.reason === `تالف`) await erp.changeStock(d.itemId, d.fromWarehouseId, -q, `تالف مرتجع من سيارة`, { ...d, type:`damage` });
-      else await erp.transferStock(d.itemId, d.fromWarehouseId, d.toWarehouseId, q, `إرجاع بضاعة`, { ...d, type:`vehicle_return` });
+      const source = requireVehicleWarehouse(d.repId, reps, warehouses);
+      const destination = mainWarehouse(warehouses);
+      if (!destination) throw new Error(`المستودع الرئيسي غير موجود.`);
+      if (d.reason === `تالف`) await erp.changeStock(d.itemId, source.warehouse.id, -q, `تالف لدى المندوب`, { ...d, type:`damage` });
+      else await erp.transferStock(d.itemId, source.warehouse.id, destination.id, q, `إرجاع بضاعة من المندوب`, { ...d, type:`vehicle_return` });
       toast(`تم اعتماد الإرجاع`);
       await renderWarehouse(root, user);
     } catch (error) {
@@ -299,11 +358,13 @@ function bindCount(root, items, warehouses, reps) {
       if (submitButton) submitButton.disabled = true;
       const item = await erp.get(`items`, d.itemId);
       if (!item) throw new Error(`الصنف غير موجود.`);
+      const vehicle = requireVehicleWarehouse(d.repId, reps, warehouses).warehouse;
       const actual = number(d.actualQuantity);
-      const result = await erp.setStock(d.itemId, d.warehouseId, actual, `فرق جرد سيارة`, d);
+      const result = await erp.setStock(d.itemId, vehicle.id, actual, `فرق جرد المندوب`, { ...d, warehouseId:vehicle.id, type:`stock_adjust` });
       const shortageValue = result.difference < 0 ? Math.abs(result.difference) * number(item.shortagePrice || item.standardSellingPrice) : 0;
       await erp.add(`stockCounts`, {
         ...d,
+        warehouseId:vehicle.id,
         expectedQuantity:result.before,
         actualQuantity:result.after,
         difference:result.difference,

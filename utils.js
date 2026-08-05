@@ -32,6 +32,35 @@ export function toast(message, type = `ok`) {
   box.appendChild(el);
   setTimeout(() => el.remove(), 4200);
 }
+export function errorMessage(error, fallback = `حدث خطأ غير متوقع.`) {
+  const raw = typeof error === `string` ? error : error?.message;
+  const message = String(raw || fallback).trim();
+  const code = typeof error === `object` && error?.code ? String(error.code) : ``;
+  return code && !message.includes(code) ? `${message} (${code})` : message;
+}
+let lastShownError = { message:``, at:0 };
+export function showError(error, fallback = `حدث خطأ غير متوقع.`) {
+  const message = errorMessage(error, fallback);
+  const currentTime = Date.now();
+  if (lastShownError.message === message && currentTime - lastShownError.at < 2000) return message;
+  lastShownError = { message, at:currentTime };
+  toast(message, `err`);
+  return message;
+}
+export function installGlobalErrorHandling() {
+  if (typeof window === `undefined` || window.__dawoodErrorHandlingInstalled) return;
+  window.__dawoodErrorHandlingInstalled = true;
+  window.addEventListener(`unhandledrejection`, event => {
+    console.error(`Unhandled promise rejection`, event.reason);
+    showError(event.reason, `تعذر إكمال العملية.`);
+    event.preventDefault();
+  });
+  window.addEventListener(`error`, event => {
+    console.error(`Unhandled application error`, event.error || event.message);
+    showError(event.error || event.message, `حدث خطأ في النظام.`);
+  });
+}
+installGlobalErrorHandling();
 export function modal(title, bodyHTML, actions = []) {
   const wrap = document.createElement(`div`);
   wrap.className = `modal-backdrop`;
@@ -43,12 +72,21 @@ export function modal(title, bodyHTML, actions = []) {
       ${buttons ? `<div class="actions modal-actions">${buttons}</div>` : ``}
     </div>`;
   document.body.appendChild(wrap);
-  wrap.addEventListener(`click`, event => {
+  wrap.addEventListener(`click`, async event => {
     if (event.target === wrap || event.target.closest(`[data-close]`)) wrap.remove();
     const btn = event.target.closest(`[data-action]`);
-    if (btn) {
+    if (btn && !btn.disabled) {
       const action = actions[number(btn.dataset.action)];
-      if (action?.handler) action.handler(wrap);
+      if (action?.handler) {
+        btn.disabled = true;
+        try { await action.handler(wrap); }
+        catch (error) {
+          console.error(`Modal action failed`, error);
+          showError(error, `تعذر إكمال العملية.`);
+        } finally {
+          if (btn.isConnected) btn.disabled = false;
+        }
+      }
     }
   });
   return wrap;
@@ -56,7 +94,7 @@ export function modal(title, bodyHTML, actions = []) {
 export function confirmModal(message, onConfirm, label = `اعتماد`) {
   return modal(`تأكيد الإجراء`, `<p>${esc(message)}</p>`, [
     { label: `إلغاء`, className: `ghost`, handler: wrap => wrap.remove() },
-    { label, className: `primary`, handler: wrap => { wrap.remove(); onConfirm?.(); } }
+    { label, className: `primary`, handler: async wrap => { wrap.remove(); await onConfirm?.(); } }
   ]);
 }
 export function badge(value, tone = `teal`) {
@@ -82,6 +120,8 @@ export function renderTabs(tabs, activeId) {
   return `<div class="tabs">${tabs.map(tab => `<button class="btn tab ${tab.id === activeId ? `active` : ``}" data-tab="${esc(tab.id)}">${esc(tab.label)}</button>`).join(``)}</div>`;
 }
 export function attachTabs(root = document) {
+  if (root.__dawoodTabsAttached) return;
+  root.__dawoodTabsAttached = true;
   root.addEventListener(`click`, event => {
     const btn = event.target.closest(`[data-tab]`);
     if (!btn) return;

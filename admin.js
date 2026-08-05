@@ -3,11 +3,13 @@ import { $, esc, money, number, normalize, getFormData, toast, table, statusBadg
 import { ROLES, roleLabel } from './permissions.js';
 
 export async function renderAdmin(root, user) {
-  const [users, logs, notifications] = await Promise.all([
+  let [users, logs, notifications] = await Promise.all([
     erp.list(`users`, { includeDeleted:true }),
     erp.list(`systemLogs`, { includeDeleted:true }),
     erp.list(`notifications`, { includeDeleted:true })
   ]);
+  for (const rep of users.filter(row => row.role === `sales_rep` && row.status !== `deleted`)) await erp.ensureRepresentativeVehicle(rep);
+  users = await erp.list(`users`, { includeDeleted:true });
   logs.sort((a,b)=>logTimestamp(b.createdAt)-logTimestamp(a.createdAt));
   root.innerHTML = `<section class="card">${renderTabs([{id:`users`,label:`المستخدمون`},{id:`roles`,label:`الصلاحيات`},{id:`logs`,label:`سجل الحركات`},{id:`notifications`,label:`الإشعارات`}],`users`)}
     <div class="panel active" data-panel="users">${usersPanel(users)}</div>
@@ -73,7 +75,7 @@ function userForm(user={}){
     <label>الحالة<select name="status"><option value="active" ${user.status!==`inactive`?`selected`:``}>فعال</option><option value="inactive" ${user.status===`inactive`?`selected`:``}>غير فعال</option></select></label>
     <label>تاريخ البداية<input name="startDate" type="date" value="${esc(user.startDate||``)}"></label>
     <label>الراتب الشهري<input name="normalMonthlySalary" type="number" step="0.001" value="${number(user.normalMonthlySalary)}"></label>
-    <label>مستودع السيارة / المستودع<input name="assignedWarehouseId" value="${esc(user.assignedWarehouseId||``)}"></label>
+    ${user.role === `sales_rep` ? `<p class="hint wide">سيارة المندوب مرتبطة تلقائياً بالحساب ولا تحتاج إلى تحديد يدوي.</p>` : ``}
     <label>النقد الحالي<input name="cashBalance" type="number" step="0.001" value="${number(user.cashBalance)}"></label>
     <label>CliQ<input name="cliqBalance" type="number" step="0.001" value="${number(user.cliqBalance)}"></label>
     <label>رصيد السلف<input name="advancesBalance" type="number" step="0.001" value="${number(user.advancesBalance)}"></label>
@@ -135,13 +137,16 @@ function bindAdmin(root, users){
         await erp.add(`users`,{id,...payload},true);
         await erp.setLoginAlias(payload.username,payload.email,id);
         await erp.setUserDirectory({id,...payload});
+        if(payload.role===`sales_rep`) await erp.ensureRepresentativeVehicle({id,...payload});
       } else if(id) {
         await erp.update(`users`,id,payload);
         await erp.setLoginAlias(payload.username,payload.email,id);
         await erp.setUserDirectory({id,...payload});
+        if(payload.role===`sales_rep`) await erp.ensureRepresentativeVehicle({id,...payload});
       } else {
         const localUser=await erp.add(`users`,{...payload,localPassword:d.password});
         await erp.setUserDirectory(localUser);
+        if(payload.role===`sales_rep`) await erp.ensureRepresentativeVehicle(localUser);
       }
       wrap.remove(); toast(`تم حفظ المستخدم وصلاحياته`); location.reload();
     }}]);

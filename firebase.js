@@ -365,16 +365,80 @@ export const erp = {
     await logAction(`import`, `settings`, `backup`, null, { collections:Object.keys(data) }, `استيراد نسخة احتياطية`);
   },
   logAction,
+  async ensureRepresentativeVehicle(userLike) {
+    const rep = userLike || {};
+    if (!rep.id || rep.role !== `sales_rep`) return null;
+    const warehouses = await this.list(`warehouses`, { includeDeleted:true });
+    let warehouse = warehouses.find(row => row.type === `vehicle` && row.id === rep.assignedWarehouseId && (!row.assignedRepId || row.assignedRepId === rep.id));
+    if (!warehouse) warehouse = warehouses.find(row => row.type === `vehicle` && row.assignedRepId === rep.id && row.status !== `deleted`);
+    if (!warehouse) {
+      const warehouseId = `vehicle_${rep.id}`;
+      warehouse = await this.add(`warehouses`, {
+        id:warehouseId,
+        warehouseCode:`VEH-${String(rep.username || rep.id).toUpperCase()}`,
+        warehouseName:`سيارة ${rep.fullName || rep.username || rep.id}`,
+        type:`vehicle`,
+        assignedRepId:rep.id,
+        status:`active`
+      }, true);
+    } else if (warehouse.assignedRepId !== rep.id || warehouse.warehouseName !== `سيارة ${rep.fullName || rep.username || rep.id}`) {
+      await this.update(`warehouses`, warehouse.id, { assignedRepId:rep.id, warehouseName:`سيارة ${rep.fullName || rep.username || rep.id}` }, true);
+      warehouse = { ...warehouse, assignedRepId:rep.id, warehouseName:`سيارة ${rep.fullName || rep.username || rep.id}` };
+    }
+    if (rep.assignedWarehouseId !== warehouse.id) {
+      await this.update(`users`, rep.id, { assignedWarehouseId:warehouse.id }, true);
+      await this.setUserDirectory({ ...rep, assignedWarehouseId:warehouse.id });
+    }
+    return warehouse;
+  },
   async changeStock(itemId, warehouseId, delta, reason, movement = {}) {
-    const item = await this.get(`items`, itemId);
-    if (!item) throw new Error(`الصنف غير موجود.`);
-    const stock = { ...(item.stock || {}) };
-    const before = Number(stock[warehouseId] || 0);
-    const after = before + Number(delta);
-    if (after < -0.0001) throw new Error(`لا يوجد رصيد كافي من الصنف ${item.itemName}. الرصيد الحالي ${before}.`);
-    stock[warehouseId] = after;
-    await this.update(`items`, itemId, { stock }, true);
-    await this.add(`inventoryMovements`, { movementNumber: uid(`MOV`), date: nowISO(), itemId, warehouseId, quantity: Number(delta), balanceBefore: before, balanceAfter: after, reason, ...movement }, true);
+    const quantityDelta = Number(delta);
+    if (!warehouseId) throw new Error(`المستودع غير محدد.`);
+    if (!Number.isFinite(quantityDelta) || quantityDelta === 0) throw new Error(`كمية الحركة غير صحيحة.`);
+    const movementNumber = movement.documentNumber || uid(`MOV`);
+    const user = firebaseState.profile || firebaseState.user || {};
+    let itemName = itemId;
+    let before = 0;
+    let after = 0;
+    if (firebaseState.mode === `firebase` && firebaseState.db) {
+      const itemRef = doc(firebaseState.db, `items`, itemId);
+      await runTransaction(firebaseState.db, async transaction => {
+        const itemSnapshot = await transaction.get(itemRef);
+        if (!itemSnapshot.exists()) throw new Error(`الصنف غير موجود.`);
+        const item = itemSnapshot.data();
+        itemName = item.itemName || itemId;
+        const stock = { ...(item.stock || {}) };
+        before = Number(stock[warehouseId] || 0);
+        after = before + quantityDelta;
+        if (after < -0.0001) throw new Error(`لا يوجد رصيد كافٍ من الصنف ${itemName}. الرصيد الحالي ${before}.`);
+        stock[warehouseId] = after;
+        transaction.update(itemRef, { stock, updatedAt:serverTimestamp(), updatedBy:user.id || user.uid || `system` });
+        transaction.set(doc(collection(firebaseState.db, `inventoryMovements`)), {
+          movementNumber, date:movement.date || nowISO(), itemId, warehouseId, quantity:quantityDelta,
+          balanceBefore:before, balanceAfter:after, reason, ...movement, status:`active`,
+          createdAt:serverTimestamp(), createdBy:user.id || user.uid || `system`, updatedAt:serverTimestamp(), updatedBy:user.id || user.uid || `system`
+        });
+      });
+    } else if (firebaseState.mode === `local`) {
+      const store = readLocalStore();
+      const item = (store.items || []).find(row => row.id === itemId);
+      if (!item) throw new Error(`الصنف غير موجود.`);
+      itemName = item.itemName || itemId;
+      const stock = { ...(item.stock || {}) };
+      before = Number(stock[warehouseId] || 0);
+      after = before + quantityDelta;
+      if (after < -0.0001) throw new Error(`لا يوجد رصيد كافٍ من الصنف ${itemName}. الرصيد الحالي ${before}.`);
+      stock[warehouseId] = after;
+      item.stock = stock;
+      item.updatedAt = nowISO();
+      item.updatedBy = user.id || user.uid || `system`;
+      store.inventoryMovements ||= [];
+      store.inventoryMovements.push({ id:uid(`move`), movementNumber, date:movement.date || nowISO(), itemId, warehouseId, quantity:quantityDelta, balanceBefore:before, balanceAfter:after, reason, ...movement, status:`active`, createdAt:nowISO(), createdBy:user.id || user.uid || `system` });
+      writeLocalStore(store);
+    } else {
+      throw new Error(`Firebase غير متصل. لا يمكن تنفيذ حركة المخزون.`);
+    }
+    await logAction(`stock_change`, `inventory`, movementNumber, { itemId, warehouseId, quantity:before }, { itemId, warehouseId, quantity:after }, `${reason} - ${itemName}`);
     return after;
   },
   async transferStock(itemId, fromWarehouseId, toWarehouseId, quantity, reason, movement = {}) {
@@ -418,6 +482,8 @@ export const erp = {
           type:movementType,
           documentNumber:movement.documentNumber || movementNumber,
           repId:movement.repId || ``,
+          fromRepId:movement.fromRepId || ``,
+          toRepId:movement.toRepId || ``,
           notes:movement.notes || ``,
           status:`active`,
           createdAt:serverTimestamp(),
@@ -445,7 +511,7 @@ export const erp = {
       item.updatedAt = nowISO();
       item.updatedBy = user.id || user.uid || `system`;
       store.inventoryMovements ||= [];
-      const common = { movementNumber, date:movementDate, itemId, reason, type:movementType, documentNumber:movement.documentNumber || movementNumber, repId:movement.repId || ``, notes:movement.notes || ``, status:`active`, createdAt:nowISO(), createdBy:user.id || user.uid || `system`, updatedAt:nowISO(), updatedBy:user.id || user.uid || `system` };
+      const common = { movementNumber, date:movementDate, itemId, reason, type:movementType, documentNumber:movement.documentNumber || movementNumber, repId:movement.repId || ``, fromRepId:movement.fromRepId || ``, toRepId:movement.toRepId || ``, notes:movement.notes || ``, status:`active`, createdAt:nowISO(), createdBy:user.id || user.uid || `system`, updatedAt:nowISO(), updatedBy:user.id || user.uid || `system` };
       store.inventoryMovements.push({ id:uid(`move`), ...common, warehouseId:fromWarehouseId, fromWarehouseId, toWarehouseId, quantity:-transferQuantity, balanceBefore:beforeFrom, balanceAfter:afterFrom, direction:`out` });
       store.inventoryMovements.push({ id:uid(`move`), ...common, warehouseId:toWarehouseId, fromWarehouseId, toWarehouseId, quantity:transferQuantity, balanceBefore:beforeTo, balanceAfter:afterTo, direction:`in` });
       writeLocalStore(store);
@@ -458,29 +524,46 @@ export const erp = {
   },
   async setStock(itemId, warehouseId, actualQuantity, reason, movement = {}) {
     if (!warehouseId) throw new Error(`المستودع غير محدد.`);
-    const item = await this.get(`items`, itemId);
-    if (!item) throw new Error(`الصنف غير موجود.`);
     const after = Number(actualQuantity);
     if (!Number.isFinite(after) || after < 0) throw new Error(`الكمية الفعلية غير صحيحة.`);
-    const stock = { ...(item.stock || {}) };
-    const before = Number(stock[warehouseId] || 0);
+    const movementNumber = uid(`MOV`);
+    const user = firebaseState.profile || firebaseState.user || {};
+    let before = 0;
+    if (firebaseState.mode === `firebase` && firebaseState.db) {
+      const itemRef = doc(firebaseState.db, `items`, itemId);
+      await runTransaction(firebaseState.db, async transaction => {
+        const itemSnapshot = await transaction.get(itemRef);
+        if (!itemSnapshot.exists()) throw new Error(`الصنف غير موجود.`);
+        const item = itemSnapshot.data();
+        const stock = { ...(item.stock || {}) };
+        before = Number(stock[warehouseId] || 0);
+        stock[warehouseId] = after;
+        transaction.update(itemRef, { stock, updatedAt:serverTimestamp(), updatedBy:user.id || user.uid || `system` });
+        transaction.set(doc(collection(firebaseState.db, `inventoryMovements`)), {
+          movementNumber, date:movement.countDate || movement.date || nowISO(), itemId, warehouseId,
+          quantity:after - before, balanceBefore:before, balanceAfter:after, reason, ...movement,
+          type:`stock_adjust`, status:`active`, createdAt:serverTimestamp(), createdBy:user.id || user.uid || `system`, updatedAt:serverTimestamp(), updatedBy:user.id || user.uid || `system`
+        });
+      });
+    } else if (firebaseState.mode === `local`) {
+      const store = readLocalStore();
+      const item = (store.items || []).find(row => row.id === itemId);
+      if (!item) throw new Error(`الصنف غير موجود.`);
+      const stock = { ...(item.stock || {}) };
+      before = Number(stock[warehouseId] || 0);
+      stock[warehouseId] = after;
+      item.stock = stock;
+      item.updatedAt = nowISO();
+      item.updatedBy = user.id || user.uid || `system`;
+      store.inventoryMovements ||= [];
+      store.inventoryMovements.push({ id:uid(`move`), movementNumber, date:movement.countDate || movement.date || nowISO(), itemId, warehouseId, quantity:after - before, balanceBefore:before, balanceAfter:after, reason, ...movement, type:`stock_adjust`, status:`active`, createdAt:nowISO(), createdBy:user.id || user.uid || `system` });
+      writeLocalStore(store);
+    } else {
+      throw new Error(`Firebase غير متصل. لا يمكن تعديل الجرد.`);
+    }
     const difference = after - before;
-    stock[warehouseId] = after;
-    await this.update(`items`, itemId, { stock }, true);
-    const savedMovement = await this.add(`inventoryMovements`, {
-      movementNumber:uid(`MOV`),
-      date:nowISO(),
-      itemId,
-      warehouseId,
-      quantity:difference,
-      balanceBefore:before,
-      balanceAfter:after,
-      reason,
-      ...movement,
-      type:`stock_adjust`
-    }, true);
-    await logAction(`stock_adjust`, `inventory`, savedMovement.id, { itemId, warehouseId, quantity:before }, { itemId, warehouseId, quantity:after }, movement.notes || reason);
-    return { before, after, difference, movementId:savedMovement.id };
+    await logAction(`stock_adjust`, `inventory`, movementNumber, { itemId, warehouseId, quantity:before }, { itemId, warehouseId, quantity:after }, movement.notes || reason);
+    return { before, after, difference, movementId:movementNumber };
   },
   async adjustUserBalance(userId, field, delta, reason, relatedId = ``) {
     const allowedFields = [`cashBalance`, `cliqBalance`, `advancesBalance`, `salaryBalance`];
