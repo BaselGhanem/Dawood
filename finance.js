@@ -19,7 +19,7 @@ export async function renderFinance(root, user) {
   const salaries = isRep ? rawSalaries.filter(s => s.employeeId === user.id) : rawSalaries;
   const expenses = isRep ? rawExpenses.filter(x => x.repId === user.id) : rawExpenses;
   const tabs = user.role === `sales_rep`
-    ? [{id:`transfer`,label:`تحويل مصاري`},{id:`incoming`,label:`إشعاراتي`},{id:`advances`,label:`سلفة`},{id:`salary`,label:`راتبي`}]
+    ? [{id:`delivery`,label:`تسليم نقد`},{id:`transfer`,label:`تحويل مصاري`},{id:`incoming`,label:`إشعاراتي`},{id:`advances`,label:`سلفة`},{id:`salary`,label:`راتبي`}]
     : [{id:`delivery`,label:`تسليم نقد`},{id:`confirm`,label:`تأكيد الاستلام`},{id:`transfer`,label:`تحويل داخلي`},{id:`incoming`,label:`موافقات التحويل`},{id:`advances`,label:`السلف`},{id:`salaries`,label:`الرواتب`},{id:`expenses`,label:`مصروف سيارة`}];
   const active = tabs[0].id;
   root.innerHTML = `<section class="card">${renderTabs(tabs, active)}
@@ -30,10 +30,10 @@ export async function renderFinance(root, user) {
     <div class="panel" data-panel="advances">${advancesPanel(users, advances, user)}</div>
     <div class="panel" data-panel="salaries">${salariesPanel(users, salaries, user)}</div>
     <div class="panel" data-panel="salary">${mySalaryPanel(user, advances, salaries)}</div>
-    <div class="panel" data-panel="expenses">${expensesPanel(users, expenses)}</div>
+    <div class="panel" data-panel="expenses">${expensesPanel(users, expenses, user)}</div>
   </section>`;
   attachTabs(root);
-  bindFinance(root, users, deliveries, transfers, user);
+  bindFinance(root, users, deliveries, transfers, expenses, user);
 }
 function activeUsers(users){ return users.filter(u => ![`inactive`,`deleted`].includes(u.status)); }
 function mergeCurrentUser(users, user) {
@@ -41,7 +41,15 @@ function mergeCurrentUser(users, user) {
   if (user?.id) map.set(user.id, { ...(map.get(user.id) || {}), ...user });
   return [...map.values()];
 }
-function canActOnDelivery(d, user){ return d.status===`pending` && d.receiverId===user.id; }
+function legacyUserId(user){ return ({dawood:`u-dawood`,moatasem:`u-moatasem`,general_manager:`u-khader`})[user?.role] || ``; }
+function deliveryTargetsUser(delivery, user){
+  if (!delivery || !user) return false;
+  if (delivery.receiverId === user.id) return true;
+  if (delivery.receiverEmail && user.email && String(delivery.receiverEmail).trim().toLowerCase() === String(user.email).trim().toLowerCase()) return true;
+  return Boolean(legacyUserId(user) && delivery.receiverId === legacyUserId(user));
+}
+function canActOnDelivery(d, user){ return d.status===`pending` && deliveryTargetsUser(d,user); }
+function canReviewExpense(expense,user){ return Boolean(expense) && (expense.approvalStatus||expense.status)===`pending` && (isSuperuser(user)||can(user,`approve`)||can(user,`finance`)); }
 function deliveryPanel(users,user){
   const list=activeUsers(users);
   const senderOptions = isSuperuser(user) || can(user,`finance`) ? list : list.filter(u=>u.id===user.id);
@@ -110,15 +118,15 @@ function salariesPanel(users,salaries,user){
   </form><br>${table([{label:`الشهر`,value:`salaryMonth`},{label:`الموظف`,value:`employeeName`},{label:`الراتب`,value:r=>money(r.baseSalary)},{label:`السلف`,value:r=>money(r.advancesDeducted)},{label:`البونص`,value:r=>money(r.bonus)},{label:`المستحق`,value:r=>money(r.entitlement)},{label:`المصروف`,value:r=>money(r.paidAmount)},{label:`صندوق الصرف`,value:`payerName`},{label:`رصيد الراتب بعد الحركة`,value:r=>money(r.salaryBalanceAfter)},{label:`الحالة`,value:r=>statusBadge(r.status)}],salaries,`لا توجد رواتب`)}`;
 }
 function mySalaryPanel(user, advances, salaries){ const remaining = number(user.salaryBalance) + number(user.normalMonthlySalary) - number(user.advancesBalance); return `<div class="grid four"><section class="card kpi"><div><div class="label">راتبي الشهري</div><div class="num">${money(user.normalMonthlySalary)}</div></div></section><section class="card kpi"><div><div class="label">السلف الحالية</div><div class="num">${money(user.advancesBalance)}</div></div></section><section class="card kpi"><div><div class="label">رصيد راتب سابق</div><div class="num">${money(user.salaryBalance)}</div></div></section><section class="card kpi"><div><div class="label">المتبقي التقريبي</div><div class="num">${money(remaining)}</div></div></section></div><br>${table([{label:`الشهر`,value:`salaryMonth`},{label:`المستحق`,value:r=>money(r.entitlement)},{label:`المصروف`,value:r=>money(r.paidAmount)},{label:`بعد الحركة`,value:r=>money(r.salaryBalanceAfter)}],salaries.filter(s=>s.employeeId===user.id),`لا توجد حركات راتب`)}`; }
-function expensesPanel(users,expenses){ return `<form id="expenseForm" class="form-grid"><label>المندوب<select name="repId">${users.filter(u=>u.role===`sales_rep`).map(u=>`<option value="${esc(u.id)}">${esc(u.fullName)}</option>`).join(``)}</select></label><label>التاريخ<input name="date" type="date" value="${todayISO()}"></label><label>نوع المصروف<select name="expenseType"><option value="tool">أداة</option><option value="maintenance">صيانة سيارة</option><option value="fuel">محروقات</option><option value="misc">متفرقات</option></select></label><label>المبلغ<input name="amount" type="number" min="0.001" step="0.001" required></label><label>المورد/الجهة<input name="vendor"></label><label>حالة الاعتماد<select name="approvalStatus"><option value="pending">بانتظار المراجعة</option><option value="approved">معتمد</option></select></label><label class="wide">ملاحظات<textarea name="notes"></textarea></label><button class="btn primary" type="submit">حفظ مصروف السيارة</button></form><br>${table([{label:`المندوب`,value:r=>esc(users.find(u=>u.id===r.repId)?.fullName||`—`)},{label:`النوع`,value:`expenseType`},{label:`المبلغ`,value:r=>money(r.amount)},{label:`الجهة`,value:`vendor`},{label:`الحالة`,value:r=>statusBadge(r.approvalStatus||r.status)}],expenses,`لا توجد مصاريف سيارات`)}`; }
+function expensesPanel(users,expenses,user){ return `<div class="hint">يُحفظ المصروف بانتظار التأكيد، ولا يُخصم من المندوب إلا عند اعتماده.</div><form id="expenseForm" class="form-grid"><label>المندوب<select name="repId">${users.filter(u=>u.role===`sales_rep`).map(u=>`<option value="${esc(u.id)}">${esc(u.fullName)}</option>`).join(``)}</select></label><label>التاريخ<input name="date" type="date" value="${todayISO()}"></label><label>نوع المصروف<select name="expenseType"><option value="tool">أداة</option><option value="maintenance">صيانة سيارة</option><option value="fuel">محروقات</option><option value="misc">متفرقات</option></select></label><label>المبلغ<input name="amount" type="number" min="0.001" step="0.001" required></label><label>المورد/الجهة<input name="vendor"></label><label class="wide">ملاحظات<textarea name="notes"></textarea></label><button class="btn primary" type="submit">حفظ مصروف السيارة</button></form><br>${table([{label:`المندوب`,value:r=>esc(users.find(u=>u.id===r.repId)?.fullName||`—`)},{label:`النوع`,value:`expenseType`},{label:`المبلغ`,value:r=>money(r.amount)},{label:`الجهة`,value:`vendor`},{label:`الحالة`,value:r=>statusBadge(r.approvalStatus||r.status)},{label:`إجراء`,value:r=>canReviewExpense(r,user)?`<button class="btn green" data-approve-expense="${esc(r.id)}">اعتماد</button> <button class="btn danger" data-reject-expense="${esc(r.id)}">رفض</button>`:`—`}],expenses,`لا توجد مصاريف سيارات`)}`; }
 
-function bindFinance(root, users, deliveries, transfers, user){
+function bindFinance(root, users, deliveries, transfers, expenses, user){
   $(`#deliveryForm`,root)?.addEventListener(`submit`,async e=>{
     e.preventDefault(); const d=getFormData(e.target); const amount=number(d.amount); const sender=users.find(u=>u.id===d.senderId), receiver=users.find(u=>u.id===d.receiverId); if(!sender||!receiver) return toast(`اختر المرسل والمستلم`,`err`); if(sender.id===receiver.id) return toast(`لا يمكن التسليم لنفس المستخدم`,`err`);
     const field=d.deliveryType===`cliq`?`cliqBalance`:`cashBalance`;
     if(number(sender[field])<amount && !isSuperuser(user)) return toast(`لا يوجد رصيد كافي للتسليم`,`err`);
     await erp.adjustUserBalance(sender.id,field,-amount,`تسليم نقد صادر بانتظار تأكيد المستلم`);
-    const delivery=await erp.add(`cashDeliveries`,{...d,amount,senderName:sender.fullName,receiverName:receiver.fullName,balanceField:field,senderDebited:true,status:`pending`});
+    const delivery=await erp.add(`cashDeliveries`,{...d,amount,senderName:sender.fullName,senderEmail:sender.email||``,receiverName:receiver.fullName,receiverEmail:receiver.email||``,balanceField:field,senderDebited:true,status:`pending`});
     await erp.add(`notifications`,{userId:receiver.id,title:`تسليم نقد جديد`,message:`وصلك طلب تسليم من ${sender.fullName} بقيمة ${money(amount)} ويحتاج تأكيدك.`,relatedType:`cashDeliveries`,relatedId:delivery.id,status:`unread`,createdAt:new Date().toISOString()});
     toast(`تم إرسال طلب التسليم وخصمه من المرسل لحين التأكيد`); location.reload();
   });
@@ -154,11 +162,13 @@ function bindFinance(root, users, deliveries, transfers, user){
     if(payer && paidAmount>0) await erp.adjustUserBalance(payer.id,`cashBalance`,-paidAmount,`صرف راتب ${emp.fullName}`);
     toast(`تم ترحيل الراتب ككشف حساب تراكمي`); location.reload();
   });
-  $(`#expenseForm`,root)?.addEventListener(`submit`,async e=>{ e.preventDefault(); const d=getFormData(e.target); const amount=number(d.amount); await erp.add(`vehicleExpenses`,{...d,amount,status:d.approvalStatus}); await erp.adjustUserBalance(d.repId,`cashBalance`,-amount,`مصروف سيارة`); toast(`تم حفظ مصروف السيارة`); location.reload(); });
+  $(`#expenseForm`,root)?.addEventListener(`submit`,async e=>{ e.preventDefault(); const d=getFormData(e.target); const amount=number(d.amount); await erp.add(`vehicleExpenses`,{...d,amount,approvalStatus:`pending`,status:`pending`,cashDeducted:false}); toast(`تم حفظ المصروف وبانتظار التأكيد`); location.reload(); });
   root.addEventListener(`click`,async e=>{
-    const c=e.target.closest(`[data-confirm-delivery]`); const r=e.target.closest(`[data-reject-delivery]`); const a=e.target.closest(`[data-accept-transfer]`); const tr=e.target.closest(`[data-reject-transfer]`);
-    if(c){ const d=deliveries.find(x=>x.id===c.dataset.confirmDelivery); if(!d||d.receiverId!==user.id) return toast(`التأكيد من حساب المستلم فقط`,`err`); const field=d.balanceField || (d.deliveryType===`cliq`?`cliqBalance`:`cashBalance`); if(!d.senderDebited) await erp.adjustUserBalance(d.senderId,field,-number(d.amount),`تسليم نقد مؤكد - قيد قديم`,d.id); await erp.adjustUserBalance(d.receiverId,field,number(d.amount),`استلام نقد مؤكد`,d.id); await erp.update(`cashDeliveries`,d.id,{status:`confirmed`,confirmedAt:new Date().toISOString(),confirmedBy:user.id}); toast(`تم تأكيد الاستلام`); location.reload(); }
-    if(r){ const d=deliveries.find(x=>x.id===r.dataset.rejectDelivery); if(!d||d.receiverId!==user.id) return toast(`الرفض من حساب المستلم فقط`,`err`); const field=d.balanceField || (d.deliveryType===`cliq`?`cliqBalance`:`cashBalance`); if(d.senderDebited) await erp.adjustUserBalance(d.senderId,field,number(d.amount),`إرجاع تسليم نقد مرفوض`,d.id); await erp.update(`cashDeliveries`,d.id,{status:`rejected`,rejectedAt:new Date().toISOString(),rejectedBy:user.id}); toast(`تم رفض التسليم ورجوع المبلغ للمرسل`,`warn`); location.reload(); }
+    const c=e.target.closest(`[data-confirm-delivery]`); const r=e.target.closest(`[data-reject-delivery]`); const a=e.target.closest(`[data-accept-transfer]`); const tr=e.target.closest(`[data-reject-transfer]`); const approveExpense=e.target.closest(`[data-approve-expense]`); const rejectExpense=e.target.closest(`[data-reject-expense]`);
+    if(c){ const d=deliveries.find(x=>x.id===c.dataset.confirmDelivery); if(!canActOnDelivery(d,user)) return toast(`التأكيد من حساب المستلم فقط`,`err`); const field=d.balanceField || (d.deliveryType===`cliq`?`cliqBalance`:`cashBalance`); if(!d.senderDebited) await erp.adjustUserBalance(d.senderId,field,-number(d.amount),`تسليم نقد مؤكد - قيد قديم`,d.id); await erp.adjustUserBalance(user.id,field,number(d.amount),`استلام نقد مؤكد`,d.id); await erp.update(`cashDeliveries`,d.id,{receiverId:user.id,receiverEmail:user.email||d.receiverEmail||``,status:`confirmed`,confirmedAt:new Date().toISOString(),confirmedBy:user.id}); toast(`تم تأكيد الاستلام`); location.reload(); }
+    if(r){ const d=deliveries.find(x=>x.id===r.dataset.rejectDelivery); if(!canActOnDelivery(d,user)) return toast(`الرفض من حساب المستلم فقط`,`err`); const field=d.balanceField || (d.deliveryType===`cliq`?`cliqBalance`:`cashBalance`); if(d.senderDebited) await erp.adjustUserBalance(d.senderId,field,number(d.amount),`إرجاع تسليم نقد مرفوض`,d.id); await erp.update(`cashDeliveries`,d.id,{receiverId:user.id,receiverEmail:user.email||d.receiverEmail||``,status:`rejected`,rejectedAt:new Date().toISOString(),rejectedBy:user.id}); toast(`تم رفض التسليم ورجوع المبلغ للمرسل`,`warn`); location.reload(); }
+    if(approveExpense){ const expense=expenses.find(x=>x.id===approveExpense.dataset.approveExpense); if(!canReviewExpense(expense,user)) return toast(`لا تملك صلاحية اعتماد هذا المصروف`,`err`); if(expense.cashDeducted===false) await erp.adjustUserBalance(expense.repId,`cashBalance`,-number(expense.amount),`اعتماد مصروف سيارة`,expense.id); await erp.update(`vehicleExpenses`,expense.id,{approvalStatus:`approved`,status:`approved`,cashDeducted:true,approvedAt:new Date().toISOString(),approvedBy:user.id}); toast(`تم اعتماد المصروف وخصمه من المندوب`); location.reload(); }
+    if(rejectExpense){ const expense=expenses.find(x=>x.id===rejectExpense.dataset.rejectExpense); if(!canReviewExpense(expense,user)) return toast(`لا تملك صلاحية رفض هذا المصروف`,`err`); if(expense.cashDeducted!==false) await erp.adjustUserBalance(expense.repId,`cashBalance`,number(expense.amount),`إرجاع مصروف سيارة مرفوض`,expense.id); await erp.update(`vehicleExpenses`,expense.id,{approvalStatus:`rejected`,status:`rejected`,cashDeducted:false,rejectedAt:new Date().toISOString(),rejectedBy:user.id}); toast(`تم رفض المصروف وإرجاع أي مبلغ مخصوم`,`warn`); location.reload(); }
     if(a){ const d=transfers.find(x=>x.id===a.dataset.acceptTransfer); if(!d||d.receiverId!==user.id) return toast(`الموافقة من حساب المستلم فقط`,`err`); await erp.adjustUserBalance(d.receiverId,d.balanceField,number(d.amount),`تحويل داخلي وارد مؤكد`,d.id); await erp.update(`internalTransfers`,d.id,{status:`confirmed`,confirmedAt:new Date().toISOString(),confirmedBy:user.id}); toast(`تم قبول الحوالة وإضافتها لصندوقك`); location.reload(); }
     if(tr){ const d=transfers.find(x=>x.id===tr.dataset.rejectTransfer); if(!d||d.receiverId!==user.id) return toast(`الرفض من حساب المستلم فقط`,`err`); await erp.adjustUserBalance(d.senderId,d.balanceField,number(d.amount),`إرجاع حوالة مرفوضة`,d.id); await erp.update(`internalTransfers`,d.id,{status:`rejected`,rejectedAt:new Date().toISOString(),rejectedBy:user.id}); toast(`تم رفض الحوالة ورجوع المبلغ للمرسل`,`warn`); location.reload(); }
     if(e.target.closest(`#exportDeliveriesBtn`)) exportExcel(`cash-deliveries.xls`, await erp.list(`cashDeliveries`, { includeDeleted:true }));
