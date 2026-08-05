@@ -15,7 +15,7 @@ export async function renderWarehouse(root, user) {
     <div class="panel" data-panel="count">${countPanel(items, warehouses, reps)}</div>
   </section>`;
   attachTabs(root);
-  bindStock(root, user);
+  bindStock(root, user, warehouses);
   bindMovement(root, items, warehouses, user);
   bindLoading(root, items, warehouses, reps);
   bindReturns(root, items, warehouses);
@@ -30,7 +30,17 @@ function stockPanel(items, warehouses, user) {
     {label:`إجراء`, value:r=>`<button class="btn" data-edit-item="${esc(r.id)}">تعديل</button> ${can(user,`delete`) ? `<button class="btn danger" data-del-item="${esc(r.id)}">حذف</button>` : ``}`}
   ], items, `لا توجد أصناف`)}</div>`;
 }
-function itemForm(item = {}) {
+function itemForm(item = {}, warehouses = []) {
+  const openingWarehouseOptions = [...warehouses]
+    .sort((a,b) => Number(b.type === `main`) - Number(a.type === `main`))
+    .map(w => `<option value="${esc(w.id)}">${esc(w.warehouseName)}</option>`)
+    .join(``);
+  const openingStockFields = item.id
+    ? `<p class="hint wide">لتعديل رصيد صنف موجود استخدم تبويب «حركة مخزون» حتى تُسجّل الحركة في كشف المخزون.</p>`
+    : `<label>مستودع الرصيد الافتتاحي<select name="openingWarehouseId" ${openingWarehouseOptions ? `required` : `disabled`}>
+        ${openingWarehouseOptions || `<option value="">أضف مستودعاً أولاً</option>`}
+      </select></label>
+      <label>الرصيد الافتتاحي<input type="number" step="0.001" min="0" name="openingBalance" value="0" ${openingWarehouseOptions ? `` : `disabled`}></label>`;
   return `<form id="itemForm" class="form-grid">
     <input type="hidden" name="id" value="${esc(item.id||``)}">
     <label>كود الصنف<input name="itemCode" required value="${esc(item.itemCode||``)}"></label>
@@ -41,6 +51,7 @@ function itemForm(item = {}) {
     <label>سعر البيع القياسي<input type="number" step="0.001" min="0" name="standardSellingPrice" value="${number(item.standardSellingPrice)}"></label>
     <label>سعر النقص على المندوب<input type="number" step="0.001" min="0" name="shortagePrice" value="${number(item.shortagePrice)}"></label>
     <label>الحد الأدنى<input type="number" step="0.001" min="0" name="minimumStock" value="${number(item.minimumStock)}"></label>
+    ${openingStockFields}
     <label>الحالة<select name="status"><option value="active" ${item.status!==`inactive`?`selected`:``}>فعال</option><option value="inactive" ${item.status===`inactive`?`selected`:``}>غير فعال</option></select></label>
     <label class="wide">ملاحظات<textarea name="notes">${esc(item.notes||``)}</textarea></label>
   </form>`;
@@ -58,7 +69,7 @@ function returnsPanel(items, warehouses) {
 function countPanel(items, warehouses, reps) {
   return `<form id="countForm" class="form-grid"><label>تاريخ الجرد<input name="countDate" type="date" value="${todayISO()}"></label><label>المندوب<select name="repId" required>${reps.map(r=>`<option value="${esc(r.id)}">${esc(r.fullName)}</option>`).join(``)}</select></label><label>مستودع السيارة<select name="warehouseId" required>${warehouses.filter(w=>w.type===`vehicle`).map(w=>`<option value="${esc(w.id)}">${esc(w.warehouseName)}</option>`).join(``)}</select></label><label>الصنف<select name="itemId" required>${items.map(i=>`<option value="${esc(i.id)}">${esc(i.itemCode)} - ${esc(i.itemName)}</option>`).join(``)}</select></label><label>الكمية الفعلية<input name="actualQuantity" type="number" step="0.001" min="0" required></label><label class="wide">ملاحظات<textarea name="notes"></textarea></label><button class="btn primary" type="submit">حفظ الجرد واحتساب الفرق</button></form>`;
 }
-function bindStock(root, user) {
+function bindStock(root, user, warehouses) {
   root.addEventListener(`click`, async e => {
     if (e.target.closest(`#newItemBtn`)) showItemModal();
     const edit = e.target.closest(`[data-edit-item]`); if (edit) showItemModal(await erp.get(`items`, edit.dataset.editItem));
@@ -68,7 +79,23 @@ function bindStock(root, user) {
   });
   async function showItemModal(item={}) {
     const { modal } = await import('./utils.js');
-    modal(item.id?`تعديل صنف`:`إضافة صنف`, itemForm(item), [{label:`حفظ`, className:`primary`, handler:async wrap=>{ const form=$(`#itemForm`,wrap); if(!form.reportValidity()) return; const d=getFormData(form); const payload={...d,costPrice:number(d.costPrice),standardSellingPrice:number(d.standardSellingPrice),shortagePrice:number(d.shortagePrice),minimumStock:number(d.minimumStock),stock:item.stock||{}}; if(d.id) await erp.update(`items`,d.id,payload); else await erp.add(`items`,payload); wrap.remove(); toast(`تم حفظ الصنف`); renderWarehouse(root,user); }}]);
+    modal(item.id?`تعديل صنف`:`إضافة صنف`, itemForm(item, warehouses), [{label:`حفظ`, className:`primary`, handler:async wrap=>{
+      const form=$(`#itemForm`,wrap);
+      if(!form.reportValidity()) return;
+      const d=getFormData(form);
+      const { openingWarehouseId, openingBalance, ...itemData } = d;
+      const payload={...itemData,costPrice:number(d.costPrice),standardSellingPrice:number(d.standardSellingPrice),shortagePrice:number(d.shortagePrice),minimumStock:number(d.minimumStock),stock:item.stock||{}};
+      if(d.id) {
+        await erp.update(`items`,d.id,payload);
+      } else {
+        const createdItem=await erp.add(`items`,payload);
+        const initialQuantity=number(openingBalance);
+        if(initialQuantity>0) await erp.changeStock(createdItem.id,openingWarehouseId,initialQuantity,`رصيد افتتاحي`,{type:`opening_balance`,notes:`رصيد افتتاحي عند إضافة الصنف`});
+      }
+      wrap.remove();
+      toast(number(openingBalance)>0?`تم حفظ الصنف ورصيده الافتتاحي`:`تم حفظ الصنف`);
+      renderWarehouse(root,user);
+    }}]);
   }
 }
 function showWarehouseModal(root,user){ import('./utils.js').then(({modal})=> modal(`إضافة مستودع`, `<form id="warehouseForm" class="form-grid two"><label>كود المستودع<input name="warehouseCode" required></label><label>اسم المستودع<input name="warehouseName" required></label><label>النوع<select name="type"><option value="main">رئيسي</option><option value="vehicle">سيارة مندوب</option></select></label><label>الحالة<select name="status"><option value="active">فعال</option><option value="inactive">غير فعال</option></select></label></form>`, [{label:`حفظ`, className:`primary`, handler:async wrap=>{const form=$(`#warehouseForm`,wrap); if(!form.reportValidity()) return; await erp.add(`warehouses`,getFormData(form)); wrap.remove(); toast(`تم حفظ المستودع`); renderWarehouse(root,user);}}])); }
