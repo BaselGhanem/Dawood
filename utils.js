@@ -254,7 +254,9 @@ export function lineBuilder(container, itemOptions, onChange) {
   };
   container.addEventListener(`click`, event => {
     if (event.target.closest(`[data-add-line]`)) {
-      const options = itemOptions.map(item => `<option value="${esc(item.id)}">${esc(item.itemCode)} - ${esc(item.itemName)}</option>`).join(``);
+      const availableItems = itemOptions.filter(item => !state.some(line => line.itemId === item.id));
+      if (!availableItems.length) return toast(`تمت إضافة جميع الأصناف المتاحة`, `warn`);
+      const options = availableItems.map(item => `<option value="${esc(item.id)}">${esc(item.itemCode)} - ${esc(item.itemName)}</option>`).join(``);
       modal(`إضافة صنف`, `
         <form id="lineForm" class="form-grid two">
           <label>الصنف<select name="itemId" required>${options}</select></label>
@@ -266,6 +268,7 @@ export function lineBuilder(container, itemOptions, onChange) {
             const form = $(`#lineForm`, wrap);
             if (!form.reportValidity()) return;
             const data = getFormData(form);
+            if (state.some(line => line.itemId === data.itemId)) return toast(`تمت إضافة هذا الصنف مسبقاً`, `warn`);
             state.push({ id: uid(`line`), itemId: data.itemId, quantity: number(data.quantity), price: number(data.price) - number(data.discount) });
             wrap.remove(); render();
           }}
