@@ -565,6 +565,123 @@ export const erp = {
     await logAction(`stock_adjust`, `inventory`, movementNumber, { itemId, warehouseId, quantity:before }, { itemId, warehouseId, quantity:after }, movement.notes || reason);
     return { before, after, difference, movementId:movementNumber };
   },
+  async applyRepresentativeStockCount(repId, warehouseId, countDate, entries, notes = ``) {
+    if (!repId) throw new Error(`المندوب غير محدد.`);
+    if (!warehouseId) throw new Error(`سيارة المندوب غير محددة.`);
+    const normalizedEntries = (Array.isArray(entries) ? entries : []).map(entry => ({
+      itemId:String(entry.itemId || ``),
+      actualQuantity:Number(entry.actualQuantity)
+    }));
+    if (!normalizedEntries.length) throw new Error(`لا توجد أصناف لاعتماد الجرد.`);
+    if (normalizedEntries.some(entry => !entry.itemId || !Number.isFinite(entry.actualQuantity) || entry.actualQuantity < 0)) throw new Error(`توجد كمية فعلية غير صحيحة في الجرد.`);
+    if (new Set(normalizedEntries.map(entry => entry.itemId)).size !== normalizedEntries.length) throw new Error(`يوجد صنف مكرر في الجرد.`);
+
+    const countNumber = uid(`COUNT`);
+    const effectiveDate = countDate || nowISO();
+    const actor = firebaseState.profile || firebaseState.user || {};
+    let lines = [];
+    let totalShortage = 0;
+    let repName = repId;
+    let advancesBefore = 0;
+    let advancesAfter = 0;
+
+    if (firebaseState.mode === `firebase` && firebaseState.db) {
+      const itemRefs = normalizedEntries.map(entry => doc(firebaseState.db, `items`, entry.itemId));
+      const repRef = doc(firebaseState.db, `users`, repId);
+      await runTransaction(firebaseState.db, async transaction => {
+        const itemSnapshots = [];
+        for (const itemRef of itemRefs) itemSnapshots.push(await transaction.get(itemRef));
+        const repSnapshot = await transaction.get(repRef);
+        if (!repSnapshot.exists()) throw new Error(`المندوب غير موجود.`);
+        const rep = repSnapshot.data();
+        repName = rep.fullName || rep.username || repId;
+        advancesBefore = Number(rep.advancesBalance || 0);
+
+        lines = normalizedEntries.map((entry, index) => {
+          const snapshot = itemSnapshots[index];
+          if (!snapshot.exists()) throw new Error(`أحد أصناف الجرد غير موجود.`);
+          const item = snapshot.data();
+          const expectedQuantity = Number(item.stock?.[warehouseId] || 0);
+          const difference = entry.actualQuantity - expectedQuantity;
+          const shortagePrice = Number(item.shortagePrice || item.standardSellingPrice || 0);
+          const shortageValue = difference < 0 ? Math.abs(difference) * shortagePrice : 0;
+          return { itemId:entry.itemId, itemName:item.itemName || entry.itemId, itemCode:item.itemCode || ``, expectedQuantity, actualQuantity:entry.actualQuantity, difference, shortagePrice, shortageValue };
+        });
+        totalShortage = lines.reduce((sum, line) => sum + line.shortageValue, 0);
+        advancesAfter = advancesBefore + totalShortage;
+
+        lines.forEach((line, index) => {
+          if (Math.abs(line.difference) < 0.0001) return;
+          const item = itemSnapshots[index].data();
+          const stock = { ...(item.stock || {}), [warehouseId]:line.actualQuantity };
+          transaction.update(itemRefs[index], { stock, updatedAt:serverTimestamp(), updatedBy:actor.id || actor.uid || `system` });
+          transaction.set(doc(collection(firebaseState.db, `inventoryMovements`)), {
+            movementNumber:uid(`MOV`), documentNumber:countNumber, countId:countNumber, date:effectiveDate,
+            itemId:line.itemId, warehouseId, repId, quantity:line.difference,
+            balanceBefore:line.expectedQuantity, balanceAfter:line.actualQuantity,
+            reason:`فرق جرد المندوب`, notes, type:`stock_adjust`, status:`active`,
+            createdAt:serverTimestamp(), createdBy:actor.id || actor.uid || `system`, updatedAt:serverTimestamp(), updatedBy:actor.id || actor.uid || `system`
+          });
+        });
+        transaction.set(doc(firebaseState.db, `stockCounts`, countNumber), {
+          countNumber, countType:`representative`, countDate:effectiveDate, repId, repName, warehouseId,
+          lines, totalItems:lines.length, changedItems:lines.filter(line => Math.abs(line.difference) >= 0.0001).length,
+          totalShortage, notes, status:`confirmed`, createdAt:serverTimestamp(), createdBy:actor.id || actor.uid || `system`, updatedAt:serverTimestamp(), updatedBy:actor.id || actor.uid || `system`
+        });
+        if (totalShortage > 0) {
+          transaction.set(doc(collection(firebaseState.db, `employeeAdvances`)), {
+            employeeId:repId, employeeName:repName, source:`stock_shortage`, relatedId:countNumber,
+            amount:totalShortage, date:effectiveDate, notes:`عجز جرد المندوب ${repName}`, status:`confirmed`,
+            createdAt:serverTimestamp(), createdBy:actor.id || actor.uid || `system`, updatedAt:serverTimestamp(), updatedBy:actor.id || actor.uid || `system`
+          });
+          transaction.update(repRef, { advancesBalance:advancesAfter, updatedAt:serverTimestamp(), updatedBy:actor.id || actor.uid || `system` });
+        }
+      });
+    } else if (firebaseState.mode === `local`) {
+      const store = readLocalStore();
+      const rep = (store.users || []).find(row => row.id === repId);
+      if (!rep) throw new Error(`المندوب غير موجود.`);
+      repName = rep.fullName || rep.username || repId;
+      advancesBefore = Number(rep.advancesBalance || 0);
+      lines = normalizedEntries.map(entry => {
+        const item = (store.items || []).find(row => row.id === entry.itemId);
+        if (!item) throw new Error(`أحد أصناف الجرد غير موجود.`);
+        const expectedQuantity = Number(item.stock?.[warehouseId] || 0);
+        const difference = entry.actualQuantity - expectedQuantity;
+        const shortagePrice = Number(item.shortagePrice || item.standardSellingPrice || 0);
+        const shortageValue = difference < 0 ? Math.abs(difference) * shortagePrice : 0;
+        if (Math.abs(difference) >= 0.0001) {
+          item.stock = { ...(item.stock || {}), [warehouseId]:entry.actualQuantity };
+          item.updatedAt = nowISO();
+          item.updatedBy = actor.id || actor.uid || `system`;
+          store.inventoryMovements ||= [];
+          store.inventoryMovements.push({ id:uid(`move`), movementNumber:uid(`MOV`), documentNumber:countNumber, countId:countNumber, date:effectiveDate, itemId:entry.itemId, warehouseId, repId, quantity:difference, balanceBefore:expectedQuantity, balanceAfter:entry.actualQuantity, reason:`فرق جرد المندوب`, notes, type:`stock_adjust`, status:`active`, createdAt:nowISO(), createdBy:actor.id || actor.uid || `system` });
+        }
+        return { itemId:entry.itemId, itemName:item.itemName || entry.itemId, itemCode:item.itemCode || ``, expectedQuantity, actualQuantity:entry.actualQuantity, difference, shortagePrice, shortageValue };
+      });
+      totalShortage = lines.reduce((sum, line) => sum + line.shortageValue, 0);
+      advancesAfter = advancesBefore + totalShortage;
+      store.stockCounts ||= [];
+      store.stockCounts.push({ id:countNumber, countNumber, countType:`representative`, countDate:effectiveDate, repId, repName, warehouseId, lines, totalItems:lines.length, changedItems:lines.filter(line => Math.abs(line.difference) >= 0.0001).length, totalShortage, notes, status:`confirmed`, createdAt:nowISO(), createdBy:actor.id || actor.uid || `system` });
+      if (totalShortage > 0) {
+        rep.advancesBalance = advancesAfter;
+        rep.updatedAt = nowISO();
+        rep.updatedBy = actor.id || actor.uid || `system`;
+        store.employeeAdvances ||= [];
+        store.employeeAdvances.push({ id:uid(`advance`), employeeId:repId, employeeName:repName, source:`stock_shortage`, relatedId:countNumber, amount:totalShortage, date:effectiveDate, notes:`عجز جرد المندوب ${repName}`, status:`confirmed`, createdAt:nowISO(), createdBy:actor.id || actor.uid || `system` });
+      }
+      writeLocalStore(store);
+    } else {
+      throw new Error(`Firebase غير متصل. لا يمكن اعتماد جرد المندوب.`);
+    }
+
+    try {
+      await logAction(`representative_stock_count`, `inventory`, countNumber, { repId, warehouseId, advancesBalance:advancesBefore }, { repId, warehouseId, advancesBalance:advancesAfter, totalShortage, changedItems:lines.filter(line => Math.abs(line.difference) >= 0.0001).length }, `اعتماد جرد شامل للمندوب ${repName}`);
+    } catch (error) {
+      console.warn(`تم اعتماد الجرد، لكن تعذر إضافة سجل التدقيق المنفصل.`, error);
+    }
+    return { countNumber, lines, totalShortage, advancesBefore, advancesAfter };
+  },
   async adjustUserBalance(userId, field, delta, reason, relatedId = ``) {
     const allowedFields = [`cashBalance`, `cliqBalance`, `advancesBalance`, `salaryBalance`];
     if (!allowedFields.includes(field)) throw new Error(`حقل الرصيد غير مسموح.`);

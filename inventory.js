@@ -133,7 +133,30 @@ function warehouseCountPanel(items, warehouses) {
 }
 
 function countPanel(items, warehouses, reps) {
-  return `<form id="countForm" class="form-grid"><label>تاريخ الجرد<input name="countDate" type="date" value="${todayISO()}"></label><label>المندوب<select name="repId" required>${reps.map(r=>`<option value="${esc(r.id)}">${esc(r.fullName)}</option>`).join(``)}</select></label><label>الصنف<select name="itemId" required>${items.map(i=>`<option value="${esc(i.id)}">${esc(i.itemCode)} - ${esc(i.itemName)}</option>`).join(``)}</select></label><label>الكمية الفعلية<input name="actualQuantity" type="number" step="0.001" min="0" required></label><label class="wide">ملاحظات<textarea name="notes"></textarea></label><button class="btn primary" type="submit" ${!reps.length || !items.length ? `disabled` : ``}>حفظ الجرد واحتساب الفرق</button></form>`;
+  const firstVehicle = vehicleWarehouseForRep(reps[0], warehouses);
+  const rows = items.map(item => {
+    const expected = number(item.stock?.[firstVehicle?.id]);
+    const shortagePrice = number(item.shortagePrice || item.standardSellingPrice);
+    return `<tr data-count-item="${esc(item.id)}" data-shortage-price="${shortagePrice}">
+      <td data-label="الكود">${esc(item.itemCode || `—`)}</td>
+      <td data-label="الصنف">${esc(item.itemName)}</td>
+      <td data-label="رصيد النظام"><input class="count-expected" value="${expected}" readonly></td>
+      <td data-label="الرصيد وقت الجرد"><input class="count-actual" type="number" min="0" step="0.001" value="${expected}" required></td>
+      <td data-label="الفرق"><strong class="count-difference">0</strong></td>
+      <td data-label="سعر النقص">${money(shortagePrice)}</td>
+      <td data-label="الخصم"><strong class="count-shortage">${money(0)}</strong></td>
+    </tr>`;
+  }).join(``);
+  return `<form id="countForm">
+    <div class="form-grid">
+      <label>تاريخ الجرد<input name="countDate" type="date" value="${todayISO()}" required></label>
+      <label>المندوب<select name="repId" required>${reps.map(r=>`<option value="${esc(r.id)}">${esc(r.fullName)}</option>`).join(``)}</select></label>
+      <label class="wide">ملاحظات<textarea name="notes" placeholder="ملاحظات عامة على جرد المندوب"></textarea></label>
+    </div>
+    <p class="hint" style="margin:14px 0">جميع الأصناف ظاهرة. عدّل فقط «الرصيد وقت الجرد» عند وجود فرق؛ العجز يُخصم من المندوب بسعر النقص المسجل للصنف.</p>
+    <div class="table-wrap"><table><thead><tr><th>الكود</th><th>الصنف</th><th>رصيد النظام</th><th>الرصيد وقت الجرد</th><th>الفرق</th><th>سعر النقص</th><th>الخصم</th></tr></thead><tbody>${rows || `<tr><td colspan="7">لا توجد أصناف للجرد</td></tr>`}</tbody></table></div>
+    <div class="actions" style="margin-top:14px"><span class="badge teal">عدد الأصناف: ${items.length}</span><span class="badge amber">إجمالي العجز: <b id="countTotalShortage">${money(0)}</b></span><button class="btn primary" type="submit" ${!reps.length || !items.length || !firstVehicle ? `disabled` : ``}>اعتماد الجرد وخصم العجز</button></div>
+  </form>`;
 }
 function bindStock(root, user, warehouses) {
   root.onclick = async e => {
@@ -349,6 +372,36 @@ function bindReturns(root, warehouses, reps, user) {
 }
 function bindCount(root, items, warehouses, reps) {
   const form = $(`#countForm`, root);
+  if (!form) return;
+  const repSelect = form.elements.repId;
+  const rows = [...form.querySelectorAll(`[data-count-item]`)];
+  const updateRow = row => {
+    const expected = number(row.querySelector(`.count-expected`)?.value);
+    const actual = number(row.querySelector(`.count-actual`)?.value);
+    const difference = actual - expected;
+    const shortage = difference < 0 ? Math.abs(difference) * number(row.dataset.shortagePrice) : 0;
+    row.querySelector(`.count-difference`).textContent = qty(difference);
+    row.querySelector(`.count-difference`).className = `count-difference ${difference < 0 ? `risk` : difference > 0 ? `ok-text` : ``}`;
+    row.querySelector(`.count-shortage`).textContent = money(shortage);
+    return shortage;
+  };
+  const updateTotals = () => {
+    const total = rows.reduce((sum, row) => sum + updateRow(row), 0);
+    $(`#countTotalShortage`, form).textContent = money(total);
+  };
+  const loadRepStock = () => {
+    const vehicle = vehicleWarehouseForRep(reps.find(rep => rep.id === repSelect.value), warehouses);
+    rows.forEach(row => {
+      const item = items.find(entry => entry.id === row.dataset.countItem);
+      const expected = number(item?.stock?.[vehicle?.id]);
+      row.querySelector(`.count-expected`).value = String(expected);
+      row.querySelector(`.count-actual`).value = String(expected);
+    });
+    updateTotals();
+  };
+  repSelect?.addEventListener(`change`, loadRepStock);
+  rows.forEach(row => row.querySelector(`.count-actual`)?.addEventListener(`input`, updateTotals));
+  updateTotals();
   form?.addEventListener(`submit`, async e => {
     e.preventDefault();
     const submitButton = e.submitter;
@@ -356,26 +409,11 @@ function bindCount(root, items, warehouses, reps) {
     const d = getFormData(e.target);
     try {
       if (submitButton) submitButton.disabled = true;
-      const item = await erp.get(`items`, d.itemId);
-      if (!item) throw new Error(`الصنف غير موجود.`);
       const vehicle = requireVehicleWarehouse(d.repId, reps, warehouses).warehouse;
-      const actual = number(d.actualQuantity);
-      const result = await erp.setStock(d.itemId, vehicle.id, actual, `فرق جرد المندوب`, { ...d, warehouseId:vehicle.id, type:`stock_adjust` });
-      const shortageValue = result.difference < 0 ? Math.abs(result.difference) * number(item.shortagePrice || item.standardSellingPrice) : 0;
-      await erp.add(`stockCounts`, {
-        ...d,
-        warehouseId:vehicle.id,
-        expectedQuantity:result.before,
-        actualQuantity:result.after,
-        difference:result.difference,
-        shortageValue,
-        status:`confirmed`
-      });
-      if (shortageValue > 0) {
-        await erp.add(`employeeAdvances`, { employeeId:d.repId, source:`stock_shortage`, amount:shortageValue, date:d.countDate, notes:`نقص جرد ${item.itemName}`, status:`confirmed` });
-        await erp.adjustUserBalance(d.repId, `advancesBalance`, shortageValue, `تسجيل نقص جرد على المندوب`);
-      }
-      toast(shortageValue > 0 ? `تم حفظ الجرد وتسجيل السلفة على المندوب` : `تم حفظ الجرد`);
+      const entries = rows.map(row => ({ itemId:row.dataset.countItem, actualQuantity:number(row.querySelector(`.count-actual`).value) }));
+      if (entries.some(entry => entry.actualQuantity < 0)) throw new Error(`الرصيد وقت الجرد لا يمكن أن يكون سالباً.`);
+      const result = await erp.applyRepresentativeStockCount(d.repId, vehicle.id, d.countDate, entries, d.notes);
+      toast(result.totalShortage > 0 ? `تم اعتماد الجرد وخصم ${money(result.totalShortage)} من المندوب` : `تم اعتماد الجرد دون عجز`);
       location.reload();
     } catch (error) {
       console.error(`تعذر حفظ جرد السيارة.`, error);
