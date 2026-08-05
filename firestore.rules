@@ -85,7 +85,8 @@ service cloud.firestore {
     match /systemLogs/{docId} {
       allow read: if isSuperuser() || isGeneralManager();
       allow create: if signedIn();
-      allow update, delete: if false;
+      allow update: if isSuperuser();
+      allow delete: if false;
     }
     match /notifications/{docId} { allow read: if isActive(); allow create, update: if isActive(); allow delete: if false; }
     match /{document=**} { allow read, write: if false; }

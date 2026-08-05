@@ -13,7 +13,7 @@ export async function renderSettings(root, user) {
   bindSettings(root);
 }
 function bindSettings(root){
-  $(`#companyForm`,root).addEventListener(`submit`,async e=>{ e.preventDefault(); const d=getFormData(e.target); await erp.add(`settings`,{id:`company`,...d},false).catch(()=>erp.update(`settings`,`company`,d)); document.documentElement.style.setProperty(`--primary`,d.primaryColor); setTheme(d.theme); toast(`تم حفظ بيانات الشركة`); });
+  $(`#companyForm`,root).addEventListener(`submit`,async e=>{ e.preventDefault(); const d=getFormData(e.target); await erp.add(`settings`,{id:`company`,...d},true).catch(()=>erp.update(`settings`,`company`,d)); document.documentElement.style.setProperty(`--primary`,d.primaryColor); setTheme(d.theme); toast(`تم حفظ بيانات الشركة`); });
   $(`#firebaseForm`,root).addEventListener(`submit`,e=>{ e.preventDefault(); const d=getFormData(e.target); saveFirebaseConfig(d); toast(`تم حفظ إعداد Firebase. أعد تحميل الصفحة لتفعيل الاتصال.`); });
   $(`#clearFirebaseBtn`,root).addEventListener(`click`,()=>{ clearFirebaseConfig(); toast(`تم إلغاء إعداد Firebase. سيتم استخدام الإعداد الرسمي الافتراضي بعد إعادة التحميل.`,`warn`); });
   $(`#backupBtn`,root).addEventListener(`click`,async()=>{ const data=await erp.exportBackup(); downloadFile(`dawood-erp-backup.json`, JSON.stringify(data,null,2), `application/json;charset=utf-8`); });
