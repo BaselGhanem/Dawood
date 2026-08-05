@@ -72,6 +72,8 @@ function bindInvoice(root, items, customers, reps, user){
   async function saveSale(status){
     try {
       const form=$(`#salesForm`,root); if(!form.reportValidity()) return; if(!lines.length) return toast(`أدخل صنفاً واحداً على الأقل`,`err`);
+      const itemIds=lines.map(line=>line.itemId);
+      if(new Set(itemIds).size!==itemIds.length) throw new Error(`لا يمكن إضافة الصنف نفسه أكثر من مرة داخل الفاتورة.`);
     const d=getFormData(form); if(user.role===`sales_rep`) d.saleType=`cash`;
     const seller=await erp.get(`users`,d.sellerId); if(!seller) return toast(`البائع غير موجود`,`err`);
     const warehouseId=seller.role===`sales_rep` ? seller.assignedWarehouseId : `main`;
@@ -212,7 +214,6 @@ function printInvoice(invoice, ctx){
       <div class="info-card"><span>المنطقة</span><strong>${esc(customer?.area||`—`)}</strong></div>
       <div class="info-card"><span>تاريخ الفاتورة</span><strong class="ltr">${esc(invoice.date||`—`)}</strong></div>
       <div class="info-card"><span>مندوب المبيعات</span><strong>${esc(seller?.fullName||invoice.sellerName||`—`)}</strong></div>
-      <div class="info-card"><span>تاريخ الاستحقاق</span><strong class="ltr">${esc(invoice.dueDate||`—`)}</strong></div>
     </div>
     <table class="invoice-table"><thead><tr><th>#</th><th>الكود</th><th>الصنف</th><th>الكمية</th><th>سعر الوحدة</th><th>الإجمالي</th></tr></thead><tbody>${rows||`<tr><td colspan="6">لا توجد أصناف في الفاتورة</td></tr>`}</tbody></table>
     <div class="invoice-bottom">
