@@ -377,6 +377,30 @@ export const erp = {
     await this.add(`inventoryMovements`, { movementNumber: uid(`MOV`), date: nowISO(), itemId, warehouseId, quantity: Number(delta), balanceBefore: before, balanceAfter: after, reason, ...movement }, true);
     return after;
   },
+  async setStock(itemId, warehouseId, actualQuantity, reason, movement = {}) {
+    if (!warehouseId) throw new Error(`المستودع غير محدد.`);
+    const item = await this.get(`items`, itemId);
+    if (!item) throw new Error(`الصنف غير موجود.`);
+    const after = Number(actualQuantity);
+    if (!Number.isFinite(after) || after < 0) throw new Error(`الكمية الفعلية غير صحيحة.`);
+    const stock = { ...(item.stock || {}) };
+    const before = Number(stock[warehouseId] || 0);
+    const difference = after - before;
+    stock[warehouseId] = after;
+    await this.update(`items`, itemId, { stock }, true);
+    await this.add(`inventoryMovements`, {
+      movementNumber:uid(`MOV`),
+      date:nowISO(),
+      itemId,
+      warehouseId,
+      quantity:difference,
+      balanceBefore:before,
+      balanceAfter:after,
+      reason,
+      ...movement
+    }, true);
+    return { before, after, difference };
+  },
   async adjustUserBalance(userId, field, delta, reason, relatedId = ``) {
     const allowedFields = [`cashBalance`, `cliqBalance`, `advancesBalance`, `salaryBalance`];
     if (!allowedFields.includes(field)) throw new Error(`حقل الرصيد غير مسموح.`);
