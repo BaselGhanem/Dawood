@@ -24,7 +24,7 @@ export async function renderFinance(root, user) {
   const active = tabs[0].id;
   root.innerHTML = `<section class="card">${renderTabs(tabs, active)}
     <div class="panel ${active===`delivery`?`active`:``}" data-panel="delivery">${deliveryPanel(users, user)}</div>
-    <div class="panel" data-panel="confirm">${confirmPanel(deliveries, user)}</div>
+    <div class="panel" data-panel="confirm">${confirmPanel(deliveries, transfers, user)}</div>
     <div class="panel ${active===`transfer`?`active`:``}" data-panel="transfer">${transferPanel(users, user)}</div>
     <div class="panel" data-panel="incoming">${incomingTransfersPanel(transfers, user)}</div>
     <div class="panel" data-panel="advances">${advancesPanel(users, advances, user)}</div>
@@ -49,6 +49,12 @@ function deliveryTargetsUser(delivery, user){
   return Boolean(legacyUserId(user) && delivery.receiverId === legacyUserId(user));
 }
 function canActOnDelivery(d, user){ return d.status===`pending` && deliveryTargetsUser(d,user); }
+function transferTargetsUser(transfer,user){
+  if (!transfer || !user) return false;
+  if (transfer.receiverId === user.id) return true;
+  if (transfer.receiverEmail && user.email && String(transfer.receiverEmail).trim().toLowerCase() === String(user.email).trim().toLowerCase()) return true;
+  return Boolean(legacyUserId(user) && transfer.receiverId === legacyUserId(user));
+}
 function canReviewExpense(expense,user){ return Boolean(expense) && (expense.approvalStatus||expense.status)===`pending` && (isSuperuser(user)||can(user,`approve`)||can(user,`finance`)); }
 function deliveryPanel(users,user){
   const list=activeUsers(users);
@@ -66,11 +72,13 @@ function deliveryPanel(users,user){
     <button class="btn primary" type="submit">إرسال طلب التسليم</button>
   </form>`;
 }
-function confirmPanel(deliveries, user){
-  const visible = isSuperuser(user) ? deliveries : deliveries.filter(d => d.receiverId === user.id || d.senderId === user.id);
+function confirmPanel(deliveries, transfers, user){
+  const visibleDeliveries = isSuperuser(user) ? deliveries : deliveries.filter(d => deliveryTargetsUser(d,user) || d.senderId === user.id);
+  const visibleTransfers = (isSuperuser(user) ? transfers : transfers.filter(t => transferTargetsUser(t,user) || t.senderId === user.id)).map(t=>({...t,deliveryNumber:t.transferNumber,deliveryType:t.balanceField===`cliqBalance`?`CliQ`:`نقد`,recordType:`transfer`}));
+  const visible = [...visibleDeliveries.map(d=>({...d,recordType:`delivery`})),...visibleTransfers];
   return `<div class="actions"><button class="btn" id="exportDeliveriesBtn">تصدير التسليمات</button></div><br>${table([
-    {label:`رقم`,value:`deliveryNumber`},{label:`المرسل`,value:`senderName`},{label:`المستلم`,value:`receiverName`},{label:`النوع`,value:`deliveryType`},{label:`المبلغ`,value:r=>money(r.amount)},{label:`الحالة`,value:r=>statusBadge(r.status)},
-    {label:`إجراء`,value:r=>canActOnDelivery(r,user)?`<button class="btn green" data-confirm-delivery="${esc(r.id)}">تأكيد</button> <button class="btn danger" data-reject-delivery="${esc(r.id)}">رفض</button>`:`—`}
+    {label:`رقم`,value:`deliveryNumber`},{label:`المصدر`,value:r=>r.recordType===`transfer`?`تحويل داخلي`:`تسليم نقد`},{label:`المرسل`,value:`senderName`},{label:`المستلم`,value:`receiverName`},{label:`النوع`,value:`deliveryType`},{label:`المبلغ`,value:r=>money(r.amount)},{label:`الحالة`,value:r=>statusBadge(r.status)},
+    {label:`إجراء`,value:r=>r.recordType===`transfer`?(r.status===`pending`&&transferTargetsUser(r,user)?`<button class="btn green" data-accept-transfer="${esc(r.id)}">تأكيد</button> <button class="btn danger" data-reject-transfer="${esc(r.id)}">رفض</button>`:`—`):(canActOnDelivery(r,user)?`<button class="btn green" data-confirm-delivery="${esc(r.id)}">تأكيد</button> <button class="btn danger" data-reject-delivery="${esc(r.id)}">رفض</button>`:`—`)}
   ],visible,`لا توجد تسليمات`)}`;
 }
 function transferPanel(users, user){
@@ -90,7 +98,7 @@ function incomingTransfersPanel(transfers, user){
   const rows = isSuperuser(user) ? transfers : transfers.filter(t => t.receiverId === user.id || t.senderId === user.id);
   return `<div class="actions"><button class="btn" id="exportTransfersBtn">تصدير التحويلات</button></div><br>${table([
     {label:`رقم`, value:`transferNumber`}, {label:`من`, value:`senderName`}, {label:`إلى`, value:`receiverName`}, {label:`الرصيد`, value:r=>r.balanceField===`cliqBalance`?`CliQ`:`نقد`}, {label:`المبلغ`, value:r=>money(r.amount)}, {label:`الحالة`, value:r=>statusBadge(r.status)},
-    {label:`إجراء`, value:r=>r.status===`pending` && r.receiverId===user.id ? `<button class="btn green" data-accept-transfer="${esc(r.id)}">موافقة</button> <button class="btn danger" data-reject-transfer="${esc(r.id)}">رفض</button>` : `—`}
+    {label:`إجراء`, value:r=>r.status===`pending` && transferTargetsUser(r,user) ? `<button class="btn green" data-accept-transfer="${esc(r.id)}">موافقة</button> <button class="btn danger" data-reject-transfer="${esc(r.id)}">رفض</button>` : `—`}
   ], rows, `لا توجد تحويلات`)}`;
 }
 function advancesPanel(users, advances, user){
@@ -136,7 +144,7 @@ function bindFinance(root, users, deliveries, transfers, expenses, user){
     if(!sender || !receiver) return toast(`اختر المرسل والمستلم`,`err`); if(sender.id===receiver.id) return toast(`لا يمكن التحويل لنفس المستخدم`,`err`);
     if(number(sender[d.balanceField])<amount && !isSuperuser(user)) return toast(`لا يوجد رصيد كافي للتحويل`,`err`);
     await erp.adjustUserBalance(sender.id,d.balanceField,-amount,`تحويل داخلي صادر بانتظار موافقة المستلم`);
-    const transfer=await erp.add(`internalTransfers`,{...d,amount,senderName:sender.fullName,receiverName:receiver.fullName,status:`pending`,senderDebited:true,requiresReceiverApproval:true});
+    const transfer=await erp.add(`internalTransfers`,{...d,amount,senderName:sender.fullName,senderEmail:sender.email||``,receiverName:receiver.fullName,receiverEmail:receiver.email||``,status:`pending`,senderDebited:true,requiresReceiverApproval:true});
     await erp.add(`notifications`,{userId:receiver.id,title:`حوالة جديدة`,message:`وصلتك حوالة من ${sender.fullName} بقيمة ${money(amount)} وتحتاج موافقتك.`,relatedType:`internalTransfers`,relatedId:transfer.id,status:`unread`,createdAt:new Date().toISOString()});
     toast(`تم إرسال التحويل وخصمه من المرسل لحين موافقة المستلم`); location.reload();
   });
@@ -169,8 +177,8 @@ function bindFinance(root, users, deliveries, transfers, expenses, user){
     if(r){ const d=deliveries.find(x=>x.id===r.dataset.rejectDelivery); if(!canActOnDelivery(d,user)) return toast(`الرفض من حساب المستلم فقط`,`err`); const field=d.balanceField || (d.deliveryType===`cliq`?`cliqBalance`:`cashBalance`); if(d.senderDebited) await erp.adjustUserBalance(d.senderId,field,number(d.amount),`إرجاع تسليم نقد مرفوض`,d.id); await erp.update(`cashDeliveries`,d.id,{receiverId:user.id,receiverEmail:user.email||d.receiverEmail||``,status:`rejected`,rejectedAt:new Date().toISOString(),rejectedBy:user.id}); toast(`تم رفض التسليم ورجوع المبلغ للمرسل`,`warn`); location.reload(); }
     if(approveExpense){ const expense=expenses.find(x=>x.id===approveExpense.dataset.approveExpense); if(!canReviewExpense(expense,user)) return toast(`لا تملك صلاحية اعتماد هذا المصروف`,`err`); if(expense.cashDeducted===false) await erp.adjustUserBalance(expense.repId,`cashBalance`,-number(expense.amount),`اعتماد مصروف سيارة`,expense.id); await erp.update(`vehicleExpenses`,expense.id,{approvalStatus:`approved`,status:`approved`,cashDeducted:true,approvedAt:new Date().toISOString(),approvedBy:user.id}); toast(`تم اعتماد المصروف وخصمه من المندوب`); location.reload(); }
     if(rejectExpense){ const expense=expenses.find(x=>x.id===rejectExpense.dataset.rejectExpense); if(!canReviewExpense(expense,user)) return toast(`لا تملك صلاحية رفض هذا المصروف`,`err`); if(expense.cashDeducted!==false) await erp.adjustUserBalance(expense.repId,`cashBalance`,number(expense.amount),`إرجاع مصروف سيارة مرفوض`,expense.id); await erp.update(`vehicleExpenses`,expense.id,{approvalStatus:`rejected`,status:`rejected`,cashDeducted:false,rejectedAt:new Date().toISOString(),rejectedBy:user.id}); toast(`تم رفض المصروف وإرجاع أي مبلغ مخصوم`,`warn`); location.reload(); }
-    if(a){ const d=transfers.find(x=>x.id===a.dataset.acceptTransfer); if(!d||d.receiverId!==user.id) return toast(`الموافقة من حساب المستلم فقط`,`err`); await erp.adjustUserBalance(d.receiverId,d.balanceField,number(d.amount),`تحويل داخلي وارد مؤكد`,d.id); await erp.update(`internalTransfers`,d.id,{status:`confirmed`,confirmedAt:new Date().toISOString(),confirmedBy:user.id}); toast(`تم قبول الحوالة وإضافتها لصندوقك`); location.reload(); }
-    if(tr){ const d=transfers.find(x=>x.id===tr.dataset.rejectTransfer); if(!d||d.receiverId!==user.id) return toast(`الرفض من حساب المستلم فقط`,`err`); await erp.adjustUserBalance(d.senderId,d.balanceField,number(d.amount),`إرجاع حوالة مرفوضة`,d.id); await erp.update(`internalTransfers`,d.id,{status:`rejected`,rejectedAt:new Date().toISOString(),rejectedBy:user.id}); toast(`تم رفض الحوالة ورجوع المبلغ للمرسل`,`warn`); location.reload(); }
+    if(a){ const d=transfers.find(x=>x.id===a.dataset.acceptTransfer); if(!transferTargetsUser(d,user)||d.status!==`pending`) return toast(`الموافقة من حساب المستلم فقط`,`err`); await erp.adjustUserBalance(user.id,d.balanceField,number(d.amount),`تحويل داخلي وارد مؤكد`,d.id); await erp.update(`internalTransfers`,d.id,{receiverId:user.id,receiverEmail:user.email||d.receiverEmail||``,status:`confirmed`,confirmedAt:new Date().toISOString(),confirmedBy:user.id}); toast(`تم قبول الحوالة وإضافتها لصندوقك`); location.reload(); }
+    if(tr){ const d=transfers.find(x=>x.id===tr.dataset.rejectTransfer); if(!transferTargetsUser(d,user)||d.status!==`pending`) return toast(`الرفض من حساب المستلم فقط`,`err`); await erp.adjustUserBalance(d.senderId,d.balanceField,number(d.amount),`إرجاع حوالة مرفوضة`,d.id); await erp.update(`internalTransfers`,d.id,{receiverId:user.id,receiverEmail:user.email||d.receiverEmail||``,status:`rejected`,rejectedAt:new Date().toISOString(),rejectedBy:user.id}); toast(`تم رفض الحوالة ورجوع المبلغ للمرسل`,`warn`); location.reload(); }
     if(e.target.closest(`#exportDeliveriesBtn`)) exportExcel(`cash-deliveries.xls`, await erp.list(`cashDeliveries`, { includeDeleted:true }));
     if(e.target.closest(`#exportTransfersBtn`)) exportExcel(`internal-transfers.xls`, await erp.list(`internalTransfers`, { includeDeleted:true }));
   });
