@@ -192,8 +192,40 @@ function bindInvoicePrinting(root, ctx){
 function printInvoice(invoice, ctx){
   const customer=ctx.customers.find(c=>c.id===invoice.customerId);
   const seller=ctx.reps.find(r=>r.id===invoice.sellerId);
-  const rows=(invoice.items||[]).map(line=>{ const item=ctx.items.find(i=>i.id===line.itemId); const total=number(line.quantity)*number(line.price); return `<tr><td>${esc(item?.itemCode||``)}</td><td>${esc(item?.itemName||line.itemId)}</td><td>${qty(line.quantity)}</td><td>${money(line.price)}</td><td>${money(total)}</td></tr>`; }).join(``);
-  printHtmlPdf(`فاتورة ${invoice.invoiceNumber||invoice.id}`, `<p class="meta">التاريخ: ${esc(invoice.date||`—`)} | العميل: ${esc(customer?.customerName||invoice.customerName||`—`)} | البائع: ${esc(seller?.fullName||invoice.sellerName||`—`)}</p><table><thead><tr><th>الكود</th><th>الصنف</th><th>الكمية</th><th>السعر</th><th>الإجمالي</th></tr></thead><tbody>${rows}<tr class="total"><td colspan="4">الإجمالي</td><td>${money(invoice.total)}</td></tr><tr><td colspan="4">المدفوع</td><td>${money(invoice.paidAmount)}</td></tr><tr><td colspan="4">المتبقي</td><td>${money(invoice.remainingDebt)}</td></tr></tbody></table><p>${esc(invoice.notes||``)}</p>`);
+  const invoiceNumber=invoice.invoiceNumber||invoice.id;
+  const saleType=invoice.saleType===`credit`?`بيع آجل`:`بيع نقدي`;
+  const paid=number(invoice.paidAmount);
+  const remaining=number(invoice.remainingDebt);
+  const rows=(invoice.items||[]).map((line,index)=>{
+    const item=ctx.items.find(i=>i.id===line.itemId);
+    const total=number(line.quantity)*number(line.price);
+    return `<tr><td>${index+1}</td><td><span class="ltr">${esc(item?.itemCode||`—`)}</span></td><td><strong>${esc(item?.itemName||line.itemId)}</strong></td><td>${qty(line.quantity)}</td><td>${money(line.price)}</td><td><strong>${money(total)}</strong></td></tr>`;
+  }).join(``);
+  printHtmlPdf(`فاتورة مبيعات`, `
+    <div class="invoice-hero">
+      <div><div class="invoice-kicker">فاتورة مبيعات</div><div class="invoice-number">${esc(invoiceNumber)}</div></div>
+      <span class="invoice-status">${esc(saleType)}</span>
+    </div>
+    <div class="invoice-info">
+      <div class="info-card"><span>العميل</span><strong>${esc(customer?.customerName||invoice.customerName||`—`)}</strong></div>
+      <div class="info-card"><span>رقم الهاتف</span><strong class="ltr">${esc(customer?.phone||`—`)}</strong></div>
+      <div class="info-card"><span>المنطقة</span><strong>${esc(customer?.area||`—`)}</strong></div>
+      <div class="info-card"><span>تاريخ الفاتورة</span><strong class="ltr">${esc(invoice.date||`—`)}</strong></div>
+      <div class="info-card"><span>مندوب المبيعات</span><strong>${esc(seller?.fullName||invoice.sellerName||`—`)}</strong></div>
+      <div class="info-card"><span>تاريخ الاستحقاق</span><strong class="ltr">${esc(invoice.dueDate||`—`)}</strong></div>
+    </div>
+    <table class="invoice-table"><thead><tr><th>#</th><th>الكود</th><th>الصنف</th><th>الكمية</th><th>سعر الوحدة</th><th>الإجمالي</th></tr></thead><tbody>${rows||`<tr><td colspan="6">لا توجد أصناف في الفاتورة</td></tr>`}</tbody></table>
+    <div class="invoice-bottom">
+      <div>
+        <div class="invoice-notes"><strong>ملاحظات الفاتورة</strong>${esc(invoice.notes||`لا توجد ملاحظات`)}</div>
+        <div class="signature"><span>توقيع المستلم</span><span>توقيع المندوب</span></div>
+      </div>
+      <div class="invoice-totals">
+        <div class="total-row grand"><span>إجمالي الفاتورة</span><strong>${money(invoice.total)}</strong></div>
+        <div class="total-row"><span>المبلغ المدفوع</span><strong>${money(paid)}</strong></div>
+        <div class="total-row due"><span>المبلغ المتبقي</span><strong>${money(remaining)}</strong></div>
+      </div>
+    </div>`);
 }
 function printCustomerStatement(customerId, ctx){
   const customer=ctx.customers.find(c=>c.id===customerId); if(!customer) return toast(`العميل غير موجود`,`err`);

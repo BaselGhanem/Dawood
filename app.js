@@ -34,7 +34,7 @@ async function renderShell(user, activePage) {
     <div class="layout ${isViewOnly(user) ? `view-only-shell` : ``}">
       <div class="shell-overlay" id="shellOverlay"></div>
       <aside class="sidebar" id="sidebar">
-        <div class="side-head"><div class="side-logo">${esc(await getLogoText())}</div><div><strong>${esc(await getCompanyName())}</strong><br><small>${esc(roleLabel(user.role))}</small></div></div>
+        <div class="side-head"><div class="side-logo"><img class="side-logo-img" src="./Logo.png" alt="شعار الشركة"></div><div><strong>${esc(await getCompanyName())}</strong><br><small>${esc(roleLabel(user.role))}</small></div></div>
         <nav class="nav">${allowedNav.map(([key,label,ico]) => `<a class="${key === activePage ? `active` : ``}" href="${key}.html"><span><span class="ico">${ico}</span> ${esc(label)}</span><span>‹</span></a>`).join(``)}</nav>
         <div class="side-foot">
           <button class="btn ghost" id="themeBtn">تبديل الوضع</button>
@@ -73,7 +73,6 @@ async function renderShell(user, activePage) {
   if (isViewOnly(user)) applyViewOnlyMode($(`#pageContent`));
 }
 async function getCompanyName(){ const s = await erp.get(`settings`,`company`); return s?.companyName || `نظام داود غانم`; }
-async function getLogoText(){ const s = await erp.get(`settings`,`company`); return s?.logoText || `د`; }
 function applyViewOnlyMode(root) {
   $$(`button`, root).forEach(button => {
     const text = button.textContent.trim();
