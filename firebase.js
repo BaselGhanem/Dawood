@@ -234,7 +234,11 @@ export const erp = {
       rows = readLocalStore().userDirectory || [];
     }
     const map = new Map();
-    [...fallback, ...rows].forEach(row => { if (row?.id) map.set(row.id, { ...map.get(row.id), ...row }); });
+    [...fallback, ...rows].forEach(row => {
+      if (!row?.id) return;
+      const identityKey = normalize(row.email) || normalize(row.username) || row.id;
+      map.set(identityKey, { ...map.get(identityKey), ...row });
+    });
     return [...map.values()].filter(row => options.includeInactive || ![`inactive`,`deleted`].includes(row.status));
   },
   async safeList(collectionName, options = {}) {
