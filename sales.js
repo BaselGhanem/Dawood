@@ -1,5 +1,5 @@
 import { erp } from './firebase.js';
-import { $, esc, money, qty, number, uid, todayISO, getFormData, toast, table, statusBadge, lineBuilder, exportExcel, renderTabs, attachTabs, printHtmlPdf, normalize } from './utils.js';
+import { $, esc, money, qty, number, uid, todayISO, getFormData, toast, confirmModal, table, statusBadge, lineBuilder, exportExcel, renderTabs, attachTabs, printHtmlPdf, normalize } from './utils.js';
 
 export async function renderSales(root, user) {
   const isRep = user.role === `sales_rep`;
@@ -49,7 +49,7 @@ function invoicePanel(customers, reps, user){
     <label class="wide">ملاحظات<textarea name="notes"></textarea></label>
   </form><div id="salesLines" style="margin-top:14px"></div><div class="actions" style="margin-top:14px"><button class="btn primary" id="confirmSaleBtn">اعتماد الفاتورة</button><button class="btn" id="draftSaleBtn">حفظ كمسودة</button></div>`;
 }
-function customersPanel(customers, reps, user){ const hint = user.role === `sales_rep` ? `<p class="hint">يمكنك تعريف عميل جديد. عند كتابة الاسم سيظهر تنبيه بالأسماء المشابهة لتجنب التكرار.</p>` : ``; return `${hint}<div class="actions"><button class="btn primary" id="newCustomerBtn">إضافة عميل</button><button class="btn" id="exportCustomersBtn">تصدير العملاء</button></div><br>${table([{label:`العميل`,value:`customerName`},{label:`الهاتف`,value:r=>`<bdi dir="ltr" style="display:inline-block;direction:ltr;unicode-bidi:isolate">${esc(r.phone || `—`)}</bdi>`},{label:`المنطقة`,value:`area`},{label:`المندوب`,value:r=>esc(reps.find(u=>u.id===r.responsibleRepId)?.fullName||`—`)},{label:`الرصيد`,value:r=>money(r.currentBalance)},{label:`الحالة`,value:r=>statusBadge(r.status)},{label:`كشف`,value:r=>`<button class="btn" data-customer-statement="${esc(r.id)}">PDF</button>`}],customers,`لا يوجد عملاء`)}`; }
+function customersPanel(customers, reps, user){ const hint = user.role === `sales_rep` ? `<p class="hint">يمكنك تعريف عميل جديد. عند كتابة الاسم سيظهر تنبيه بالأسماء المشابهة لتجنب التكرار.</p>` : ``; const superuser=[`admin`,`dawood`,`moatasem`].includes(user.role); return `${hint}<div class="actions"><button class="btn primary" id="newCustomerBtn">إضافة عميل</button><button class="btn" id="exportCustomersBtn">تصدير العملاء</button></div><br>${table([{label:`العميل`,value:`customerName`},{label:`الهاتف`,value:r=>`<bdi dir="ltr" style="display:inline-block;direction:ltr;unicode-bidi:isolate">${esc(r.phone || `—`)}</bdi>`},{label:`المنطقة`,value:`area`},{label:`المندوب`,value:r=>esc(reps.find(u=>u.id===r.responsibleRepId)?.fullName||`—`)},{label:`الرصيد`,value:r=>money(r.currentBalance)},{label:`الحالة`,value:r=>statusBadge(r.status)},{label:`إجراء`,value:r=>`<button class="btn" data-customer-statement="${esc(r.id)}">PDF</button>${superuser?` <button class="btn danger" data-delete-customer="${esc(r.id)}">حذف</button>`:``}`}],customers,`لا يوجد عملاء`)}`; }
 function debtsPanel(debts, user){ const open = (user.role===`sales_rep`?debts.filter(d=>d.repId===user.id):debts).filter(d=>d.status!==`paid`); return `<div class="actions"><button class="btn" id="exportDebtsBtn">تصدير الذمم</button></div><br>${table([{label:`العميل`,value:`customerName`},{label:`الفاتورة`,value:`invoiceNumber`},{label:`الأصل`,value:r=>money(r.originalAmount)},{label:`المدفوع`,value:r=>money(r.paidAmount)},{label:`المتبقي`,value:r=>money(r.remainingAmount)},{label:`الاستحقاق`,value:`dueDate`},{label:`الحالة`,value:r=>statusBadge(r.status)},{label:`تحصيل`,value:r=>`<button class="btn green" data-collect="${esc(r.id)}">تسجيل تحصيل</button>`}],open,`لا توجد ذمم مفتوحة`)}`; }
 function historyPanel(invoices, customers, reps){ return `<div class="actions"><button class="btn" id="exportSalesBtn">تصدير الفواتير</button></div><br>${table([{label:`رقم`,value:`invoiceNumber`},{label:`التاريخ`,value:`date`},{label:`العميل`,value:r=>esc(customers.find(c=>c.id===r.customerId)?.customerName||r.customerName||`—`)},{label:`البائع`,value:r=>esc(reps.find(u=>u.id===r.sellerId)?.fullName||`—`)},{label:`النوع`,value:r=>r.saleType===`cash`?`نقدي`:`ذمم`},{label:`الإجمالي`,value:r=>money(r.total)},{label:`الحالة`,value:r=>statusBadge(r.status)},{label:`طباعة`,value:r=>`<button class="btn" data-print-invoice="${esc(r.id)}">طباعة</button>`}],invoices,`لا توجد فواتير`)}`; }
 function salesByItemPanel(invoices, items, reps, user){ const sellerSelect = user.role === `sales_rep` ? `` : `<label>المندوب<select id="salesReportRep"><option value="">الكل</option>${reps.filter(r=>[`sales_rep`,`dawood`,`moatasem`,`admin`].includes(r.role)).map(r=>`<option value="${esc(r.id)}">${esc(r.fullName)}</option>`).join(``)}</select></label>`; return `<div class="filters"><label>من تاريخ<input id="salesReportFrom" type="date" value="${todayISO().slice(0,8)}01"></label><label>إلى تاريخ<input id="salesReportTo" type="date" value="${todayISO()}"></label>${sellerSelect}<label>الصنف<select id="salesReportItem"><option value="">الكل</option>${items.map(i=>`<option value="${esc(i.id)}">${esc(i.itemName)}</option>`).join(``)}</select></label><button class="btn" id="exportSalesByItemBtn">تصدير التقرير</button></div><div id="salesByItemResult" style="margin-top:14px"></div>`; }
@@ -66,7 +66,27 @@ function customerForm(reps, user){
 
 function bindInvoice(root, items, customers, reps, user){
   let lines=[];
-  lineBuilder($(`#salesLines`,root),items.filter(i=>i.status===`active`), l=>{lines=l});
+  const linesRoot=$(`#salesLines`,root);
+  if(user.role===`sales_rep`){
+    const warehouseId=user.assignedWarehouseId;
+    const availableItems=items.filter(item=>item.status===`active` && number(item.stock?.[warehouseId])>0);
+    linesRoot.innerHTML=availableItems.length ? `
+      <p class="hint" style="margin-bottom:10px">جميع الأصناف الموجودة معك ظاهرة للتذكير. أدخل الكمية فقط للأصناف المراد بيعها.</p>
+      <div class="table-wrap"><table><thead><tr><th>الصنف</th><th>الكمية في مستودعك</th><th>الكمية المراد بيعها</th><th>سعر الوحدة</th></tr></thead><tbody>
+        ${availableItems.map(item=>`<tr data-sale-stock-item="${esc(item.id)}"><td data-label="الصنف"><strong>${esc(item.itemCode||``)}</strong> - ${esc(item.itemName)}</td><td data-label="الكمية في مستودعك">${qty(item.stock?.[warehouseId])}</td><td data-label="الكمية المراد بيعها"><input class="sale-stock-quantity" type="number" min="0" max="${number(item.stock?.[warehouseId])}" step="0.001" value="0"></td><td data-label="سعر الوحدة"><input class="sale-stock-price" type="number" min="0" step="0.001" value="${number(item.standardSellingPrice)}"></td></tr>`).join(``)}
+      </tbody></table></div>` : `<div class="empty">لا توجد أصناف برصيد متاح في مستودعك.</div>`;
+    const refreshLines=()=>{
+      lines=[...linesRoot.querySelectorAll(`[data-sale-stock-item]`)].map(row=>({
+        itemId:row.dataset.saleStockItem,
+        quantity:number(row.querySelector(`.sale-stock-quantity`)?.value),
+        price:number(row.querySelector(`.sale-stock-price`)?.value)
+      })).filter(line=>line.quantity>0);
+    };
+    linesRoot.addEventListener(`input`,refreshLines);
+    refreshLines();
+  }else{
+    lineBuilder(linesRoot,items.filter(i=>i.status===`active`), l=>{lines=l});
+  }
   $(`#confirmSaleBtn`,root)?.addEventListener(`click`,()=>saveSale(`confirmed`));
   $(`#draftSaleBtn`,root)?.addEventListener(`click`,()=>saveSale(`draft`));
   async function saveSale(status){
@@ -115,6 +135,15 @@ function bindCustomers(root,reps,user, ctx){
       bindSimilarCustomerWarning(wrap, ctx.allCustomers || ctx.customers || []);
     }
     const statement=e.target.closest(`[data-customer-statement]`); if(statement) printCustomerStatement(statement.dataset.customerStatement, ctx);
+    const deletion=e.target.closest(`[data-delete-customer]`);
+    if(deletion && [`admin`,`dawood`,`moatasem`].includes(user.role)){
+      const customer=ctx.customers.find(row=>row.id===deletion.dataset.deleteCustomer);
+      confirmModal(`سيُحذف العميل ${customer?.customerName||``} نهائياً من دليل العملاء، مع إبقاء الفواتير والحركات التاريخية محفوظة.`,async()=>{
+        await erp.hardDelete(`customers`,deletion.dataset.deleteCustomer);
+        toast(`تم حذف العميل نهائياً`);
+        location.reload();
+      },`حذف نهائي`);
+    }
     if(e.target.closest(`#exportCustomersBtn`)) exportExcel(`customers.xls`, user.role===`sales_rep` ? ctx.customers : await erp.safeList(`customers`));
     if(e.target.closest(`#exportSalesBtn`)) exportExcel(`sales.xls`, filteredSales(await erp.safeList(`salesInvoices`), user));
     if(e.target.closest(`#exportDebtsBtn`)) exportExcel(`customer-debts.xls`, user.role===`sales_rep` ? await erp.safeList(`customerDebts`, { where:[[ `repId`, `==`, user.id ]] }) : await erp.safeList(`customerDebts`));
