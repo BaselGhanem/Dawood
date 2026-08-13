@@ -1,5 +1,5 @@
 import { erp } from './firebase.js';
-import { $, esc, money, qty, number, uid, todayISO, getFormData, toast, confirmModal, table, statusBadge, renderTabs, attachTabs, exportExcel } from './utils.js';
+import { $, esc, money, qty, number, uid, todayISO, getFormData, toast, confirmModal, table, statusBadge, renderTabs, attachTabs, exportExcel, searchableAutocomplete } from './utils.js';
 import { can } from './permissions.js';
 
 const cats = { raw_material:`مواد خام`, manufactured:`منتجات مصنّعة`, ready_goods:`بضاعة جاهزة`, tools:`عدد وأدوات`, maintenance:`صيانة`, miscellaneous:`متفرقات` };
@@ -106,9 +106,7 @@ function movementDate(value) {
 }
 function loadingPanel(items, warehouses, reps) {
   const main = mainWarehouse(warehouses);
-  const availableItems=items.filter(item=>item.status===`active` && number(item.stock?.[main?.id])>0);
-  const rows=availableItems.map(item=>`<tr data-loading-item="${esc(item.id)}"><td data-label="الكود">${esc(item.itemCode||`—`)}</td><td data-label="الصنف">${esc(item.itemName)}</td><td data-label="الرصيد في الرئيسي">${qty(item.stock?.[main?.id])}</td><td data-label="الكمية المراد تحميلها"><input class="loading-quantity" type="number" min="0" max="${number(item.stock?.[main?.id])}" step="0.001" value="0"></td></tr>`).join(``);
-  return `<form id="loadingForm"><div class="form-grid"><label>رقم التحميل<input name="loadingNumber" value="${uid(`LOAD`)}" readonly></label><label>التاريخ<input name="date" type="date" value="${todayISO()}"></label><label>المندوب<select name="repId" required>${reps.map(r=>`<option value="${esc(r.id)}">${esc(r.fullName)}</option>`).join(``)}</select></label><label class="wide">ملاحظات<textarea name="notes"></textarea></label></div><p class="hint" style="margin:14px 0">جميع أصناف المستودع الرئيسي ذات الرصيد المتاح ظاهرة. أدخل الكمية فقط للأصناف المراد تحميلها.</p><div class="table-wrap"><table><thead><tr><th>الكود</th><th>الصنف</th><th>الرصيد في الرئيسي</th><th>الكمية المراد تحميلها</th></tr></thead><tbody>${rows||`<tr><td colspan="4">لا توجد أصناف برصيد متاح في المستودع الرئيسي</td></tr>`}</tbody></table></div><div class="actions" style="margin-top:14px"><span class="badge teal">الأصناف المتاحة: ${availableItems.length}</span><button class="btn primary" type="submit" ${!availableItems.length||!main||!reps.length?`disabled`:``}>اعتماد التحميل</button></div></form>`;
+  return `<form id="loadingForm"><div class="form-grid"><label>رقم التحميل<input name="loadingNumber" value="${uid(`LOAD`)}" readonly></label><label>التاريخ<input name="date" type="date" value="${todayISO()}"></label><label>المندوب<select name="repId" required>${reps.map(r=>`<option value="${esc(r.id)}">${esc(r.fullName)}</option>`).join(``)}</select></label><label class="wide">ملاحظات<textarea name="notes"></textarea></label></div><div class="actions" style="margin:14px 0"><button class="btn primary" id="addLoadingItemBtn" type="button">إضافة صنف</button><span class="badge teal">الأصناف المختارة: <b id="loadingItemsCount">0</b></span></div><div id="loadingLines" class="loading-lines"><div class="empty">اضغط «إضافة صنف» لاختيار الأصناف والكميات المراد تحميلها.</div></div><div class="actions" style="margin-top:14px"><button class="btn primary" type="submit" ${!items.length||!main||!reps.length?`disabled`:``}>اعتماد التحميل</button></div></form>`;
 }
 function repTransferPanel(items, warehouses, reps) {
   return `<form id="repTransferForm" class="form-grid"><label>التاريخ<input name="date" type="date" value="${todayISO()}" required></label><label>من المندوب<select name="fromRepId" required>${reps.map(rep=>`<option value="${esc(rep.id)}">${esc(rep.fullName)}</option>`).join(``)}</select></label><label>إلى المندوب<select name="toRepId" required>${reps.map(rep=>`<option value="${esc(rep.id)}">${esc(rep.fullName)}</option>`).join(``)}</select></label><label>الصنف<select name="itemId" required>${items.map(item=>`<option value="${esc(item.id)}">${esc(item.itemCode)} - ${esc(item.itemName)}</option>`).join(``)}</select></label><label>رصيد المندوب المرسل<input id="repTransferAvailableStock" readonly></label><label>الكمية<input name="quantity" type="number" min="0.001" step="0.001" required></label><label class="wide">ملاحظات<textarea name="notes" required></textarea></label><button class="btn primary" type="submit" ${reps.length < 2 || !items.length ? `disabled` : ``}>نقل البضاعة</button></form>`;
@@ -265,24 +263,69 @@ function bindWarehouseCount(root, items, user) {
 }
 
 function bindLoading(root, items, warehouses, user) {
-  const form = $(`#loadingForm`, root);
-  if (!form) return;
-  const rows=[...form.querySelectorAll(`[data-loading-item]`)];
-  form.addEventListener(`input`,event=>{
-    const input=event.target.closest(`.loading-quantity`);
-    if(!input) return;
-    const max=number(input.max);
-    input.setCustomValidity(number(input.value)>max?`الكمية المطلوبة أكبر من الرصيد المتاح.`:``);
-  });
-  form.addEventListener(`submit`, async event => {
+  const form=$(`#loadingForm`,root);
+  if(!form) return;
+  const source=mainWarehouse(warehouses);
+  const linesRoot=$(`#loadingLines`,form);
+  const countRoot=$(`#loadingItemsCount`,form);
+  const activeItems=items.filter(item=>item.status===`active` && number(item.stock?.[source?.id])>0);
+  let lineSequence=0;
+  const updateCount=()=>{ countRoot.textContent=String(linesRoot.querySelectorAll(`[data-loading-line]`).length); };
+  const addLine=()=>{
+    const lineId=`loading-line-${++lineSequence}`;
+    if(!linesRoot.querySelector(`[data-loading-line]`)) linesRoot.innerHTML=``;
+    const line=document.createElement(`section`);
+    line.className=`loading-line`;
+    line.dataset.loadingLine=lineId;
+    line.innerHTML=`<label class="autocomplete-field">اختيار الصنف<input class="loading-item-search" type="search" required placeholder="اكتب أي جزء من اسم الصنف"><input class="loading-item-id" type="hidden"></label><label>الرصيد المتاح<input class="loading-available" value="—" readonly></label><label>الكمية المراد تحميلها<input class="loading-quantity" type="number" min="0.001" step="0.001" required disabled></label><button class="btn danger loading-remove" type="button">حذف</button>`;
+    linesRoot.appendChild(line);
+    const itemInput=line.querySelector(`.loading-item-search`);
+    const idInput=line.querySelector(`.loading-item-id`);
+    const availableInput=line.querySelector(`.loading-available`);
+    const quantityInput=line.querySelector(`.loading-quantity`);
+    searchableAutocomplete(itemInput,activeItems,{
+      getLabel:item=>`${item.itemCode || ``} - ${item.itemName}`,
+      getValue:item=>item.id,
+      invalidMessage:`صنف غير موجود`,
+      requiredMessage:`اختر الصنف`,
+      onSelect:item=>{
+        const duplicate=[...linesRoot.querySelectorAll(`[data-loading-line]`)].some(other=>other!==line && other.querySelector(`.loading-item-id`)?.value===item.id);
+        if(duplicate){
+          idInput.value=``; availableInput.value=`—`; quantityInput.value=``; quantityInput.disabled=true;
+          itemInput.value=``; delete itemInput.dataset.selectedValue;
+          itemInput.setCustomValidity(`تمت إضافة هذا الصنف مسبقاً`);
+          toast(`تمت إضافة هذا الصنف مسبقاً`,`warn`);
+          return;
+        }
+        const available=number(item.stock?.[source?.id]);
+        idInput.value=item.id;
+        availableInput.value=qty(available);
+        quantityInput.disabled=false;
+        quantityInput.max=String(available);
+        quantityInput.focus();
+      },
+      onClear:()=>{ idInput.value=``; availableInput.value=`—`; quantityInput.value=``; quantityInput.disabled=true; }
+    });
+    line.querySelector(`.loading-remove`).addEventListener(`click`,()=>{
+      line.remove();
+      if(!linesRoot.querySelector(`[data-loading-line]`)) linesRoot.innerHTML=`<div class="empty">اضغط «إضافة صنف» لاختيار الأصناف والكميات المراد تحميلها.</div>`;
+      updateCount();
+    });
+    quantityInput.addEventListener(`input`,()=>{
+      quantityInput.setCustomValidity(number(quantityInput.value)>number(quantityInput.max)?`الكمية المطلوبة أكبر من الرصيد المتاح.`:``);
+    });
+    updateCount();
+    itemInput.focus();
+  };
+  $(`#addLoadingItemBtn`,form)?.addEventListener(`click`,addLine);
+  form.addEventListener(`submit`,async event=>{
     event.preventDefault();
     const submitButton=event.submitter;
     if(submitButton?.disabled||!form.reportValidity()) return;
     const d=getFormData(form);
-    const entries=rows.map(row=>({itemId:row.dataset.loadingItem,quantity:number(row.querySelector(`.loading-quantity`)?.value)})).filter(entry=>entry.quantity>0);
-    if(!entries.length) return toast(`أدخل كمية لصنف واحد على الأقل`,`err`);
-    const source=mainWarehouse(warehouses);
-    if(!source) return toast(`المستودع الرئيسي غير موجود.`,`err`);
+    const entries=[...linesRoot.querySelectorAll(`[data-loading-line]`)].map(line=>({itemId:line.querySelector(`.loading-item-id`)?.value,quantity:number(line.querySelector(`.loading-quantity`)?.value)}));
+    if(!entries.length) return toast(`أضف صنفاً واحداً على الأقل`,`err`);
+    if(entries.some(entry=>!entry.itemId)) return toast(`صنف غير موجود`,`err`);
     let vehicle;
     try{ vehicle=requireVehicleWarehouse(d.repId,await erp.userDirectory(),warehouses).warehouse; }
     catch(error){ return toast(error.message,`err`); }
@@ -290,12 +333,11 @@ function bindLoading(root, items, warehouses, user) {
       for(const entry of entries){
         const item=items.find(row=>row.id===entry.itemId);
         const available=number(item?.stock?.[source.id]);
+        if(entry.quantity<=0) throw new Error(`أدخل كمية صحيحة للصنف ${item?.itemName||``}`);
         if(entry.quantity>available+0.0001) throw new Error(`لا يمكن تحميل ${item?.itemName||`الصنف`}. الرصيد المتاح ${available} فقط.`);
       }
       if(submitButton) submitButton.disabled=true;
-      for(const entry of entries){
-        await erp.transferStock(entry.itemId,source.id,vehicle.id,entry.quantity,`تحميل المندوب`,{type:`vehicle_load`,date:d.date,repId:d.repId,documentNumber:d.loadingNumber,notes:d.notes});
-      }
+      for(const entry of entries) await erp.transferStock(entry.itemId,source.id,vehicle.id,entry.quantity,`تحميل المندوب`,{type:`vehicle_load`,date:d.date,repId:d.repId,documentNumber:d.loadingNumber,notes:d.notes});
       toast(`تم تحميل ${entries.length} صنفاً للمندوب`);
       await renderWarehouse(root,user);
     }catch(error){
