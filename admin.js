@@ -1,5 +1,5 @@
 import { erp, createAuthUserViaRest, firebaseState, usernameKey } from './firebase.js';
-import { $, esc, money, number, normalize, getFormData, toast, table, statusBadge, renderTabs, attachTabs, exportExcel } from './utils.js';
+import { $, esc, money, number, normalize, getFormData, toast, confirmModal, table, statusBadge, renderTabs, attachTabs, exportExcel } from './utils.js';
 import { ROLES, roleLabel } from './permissions.js';
 
 export async function renderAdmin(root, user) {
@@ -18,7 +18,7 @@ export async function renderAdmin(root, user) {
     <div class="panel" data-panel="notifications">${notificationsPanel(notifications, users)}</div>
   </section>`;
   attachTabs(root);
-  bindAdmin(root, users);
+  bindAdmin(root, users, user);
 }
 
 function usersPanel(users){
@@ -26,7 +26,7 @@ function usersPanel(users){
     {label:`الاسم`,value:`fullName`},{label:`البريد`,value:`email`},{label:`اسم المستخدم`,value:`username`},{label:`الدور`,value:r=>roleLabel(r.role)},
     {label:`الراتب`,value:r=>money(r.normalMonthlySalary)},{label:`النقد`,value:r=>money(r.cashBalance)},{label:`CliQ`,value:r=>money(r.cliqBalance)},
     {label:`السلف`,value:r=>money(r.advancesBalance)},{label:`رصيد الراتب`,value:r=>money(r.salaryBalance)},{label:`الحالة`,value:r=>statusBadge(r.status)},
-    {label:`إجراء`,value:r=>`<button class="btn" data-edit-user="${esc(r.id)}">تعديل</button> <button class="btn danger" data-disable-user="${esc(r.id)}">تعطيل</button>`}
+    {label:`إجراء`,value:r=>`<button class="btn" data-edit-user="${esc(r.id)}">تعديل</button> <button class="btn danger" data-disable-user="${esc(r.id)}">تعطيل</button> <button class="btn danger" data-delete-user="${esc(r.id)}">حذف نهائي</button>`}
   ],users,`لا يوجد مستخدمون`)}`;
 }
 function rolesPanel(){ return table([{label:`الدور`,value:r=>roleLabel(r.key)},{label:`الصفحات`,value:r=>esc(r.pages.join(`، `))},{label:`الأوامر`,value:r=>esc(r.actions.join(`، `))},{label:`نطاق البيانات`,value:r=>esc(r.data.join(`، `))}],Object.entries(ROLES).map(([key,v])=>({key,...v})),`لا توجد صلاحيات`); }
@@ -83,11 +83,24 @@ function userForm(user={}){
     <p class="hint wide">تعريف المستخدمين الرسمي يتم من هذه الشاشة فقط. صفحة الموظفين للعرض والتعديل التشغيلي، وليست لإنشاء حساب دخول.</p>
   </form>`;
 }
-function bindAdmin(root, users){
+function bindAdmin(root, users, currentUser){
   root.addEventListener(`click`,async e=>{
     if(e.target.closest(`#newUserBtn`)) showUser();
     const edit=e.target.closest(`[data-edit-user]`); if(edit) showUser(await erp.get(`users`,edit.dataset.editUser));
     const dis=e.target.closest(`[data-disable-user]`); if(dis){ const oldUser=await erp.get(`users`,dis.dataset.disableUser); await erp.update(`users`,dis.dataset.disableUser,{status:`inactive`}); if(oldUser) await erp.setUserDirectory({...oldUser,status:`inactive`}); toast(`تم تعطيل المستخدم`); location.reload(); }
+    const deletion=e.target.closest(`[data-delete-user]`);
+    if(deletion){
+      const targetId=deletion.dataset.deleteUser;
+      const target=users.find(row=>row.id===targetId);
+      if(targetId===currentUser.id) return toast(`لا يمكن حذف حسابك الحالي`,`err`);
+      confirmModal(`سيُحذف المستخدم ${target?.fullName||``} نهائياً من النظام ودليل الدخول، ولن يتمكن من تسجيل الدخول. ستبقى الحركات التاريخية باسمه محفوظة.`,async()=>{
+        if(target?.username) await erp.hardDelete(`loginAliases`,usernameKey(target.username));
+        await erp.hardDelete(`userDirectory`,targetId);
+        await erp.hardDelete(`users`,targetId);
+        toast(`تم حذف المستخدم نهائياً من النظام`);
+        location.reload();
+      },`حذف نهائي`);
+    }
     if(e.target.closest(`#syncDirectoryBtn`)){ await erp.syncUserDirectory(await erp.list(`users`,{includeDeleted:true})); toast(`تمت مزامنة دليل المستخدمين للواجهات المحدودة`); location.reload(); }
     if(e.target.closest(`#exportUsersBtn`)) exportExcel(`users.xls`, await erp.list(`users`,{includeDeleted:true}));
     if(e.target.closest(`#exportLogsBtn`)) exportExcel(`system-logs.xls`, await erp.list(`systemLogs`,{includeDeleted:true}));
