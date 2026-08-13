@@ -106,8 +106,9 @@ function movementDate(value) {
 }
 function loadingPanel(items, warehouses, reps) {
   const main = mainWarehouse(warehouses);
-  const firstBalance = number(items[0]?.stock?.[main?.id]);
-  return `<form id="loadingForm" class="form-grid"><label>رقم التحميل<input name="loadingNumber" value="${uid(`LOAD`)}" readonly></label><label>التاريخ<input name="date" type="date" value="${todayISO()}"></label><label>المندوب<select name="repId" required>${reps.map(r=>`<option value="${esc(r.id)}">${esc(r.fullName)}</option>`).join(``)}</select></label><label>المصدر<input value="المستودع الرئيسي" readonly></label><label>الصنف<select name="itemId" required>${items.map(i=>`<option value="${esc(i.id)}">${esc(i.itemCode)} - ${esc(i.itemName)}</option>`).join(``)}</select></label><label>الرصيد المتاح في الرئيسي<input id="loadingAvailableStock" value="${firstBalance}" readonly></label><label>الكمية<input name="quantity" type="number" min="0.001" max="${firstBalance}" step="0.001" required></label><label class="wide">ملاحظات<textarea name="notes"></textarea></label><button class="btn primary" type="submit" ${!items.length || !main || !reps.length ? `disabled` : ``}>اعتماد التحميل</button></form>`;
+  const availableItems=items.filter(item=>item.status===`active` && number(item.stock?.[main?.id])>0);
+  const rows=availableItems.map(item=>`<tr data-loading-item="${esc(item.id)}"><td data-label="الكود">${esc(item.itemCode||`—`)}</td><td data-label="الصنف">${esc(item.itemName)}</td><td data-label="الرصيد في الرئيسي">${qty(item.stock?.[main?.id])}</td><td data-label="الكمية المراد تحميلها"><input class="loading-quantity" type="number" min="0" max="${number(item.stock?.[main?.id])}" step="0.001" value="0"></td></tr>`).join(``);
+  return `<form id="loadingForm"><div class="form-grid"><label>رقم التحميل<input name="loadingNumber" value="${uid(`LOAD`)}" readonly></label><label>التاريخ<input name="date" type="date" value="${todayISO()}"></label><label>المندوب<select name="repId" required>${reps.map(r=>`<option value="${esc(r.id)}">${esc(r.fullName)}</option>`).join(``)}</select></label><label class="wide">ملاحظات<textarea name="notes"></textarea></label></div><p class="hint" style="margin:14px 0">جميع أصناف المستودع الرئيسي ذات الرصيد المتاح ظاهرة. أدخل الكمية فقط للأصناف المراد تحميلها.</p><div class="table-wrap"><table><thead><tr><th>الكود</th><th>الصنف</th><th>الرصيد في الرئيسي</th><th>الكمية المراد تحميلها</th></tr></thead><tbody>${rows||`<tr><td colspan="4">لا توجد أصناف برصيد متاح في المستودع الرئيسي</td></tr>`}</tbody></table></div><div class="actions" style="margin-top:14px"><span class="badge teal">الأصناف المتاحة: ${availableItems.length}</span><button class="btn primary" type="submit" ${!availableItems.length||!main||!reps.length?`disabled`:``}>اعتماد التحميل</button></div></form>`;
 }
 function repTransferPanel(items, warehouses, reps) {
   return `<form id="repTransferForm" class="form-grid"><label>التاريخ<input name="date" type="date" value="${todayISO()}" required></label><label>من المندوب<select name="fromRepId" required>${reps.map(rep=>`<option value="${esc(rep.id)}">${esc(rep.fullName)}</option>`).join(``)}</select></label><label>إلى المندوب<select name="toRepId" required>${reps.map(rep=>`<option value="${esc(rep.id)}">${esc(rep.fullName)}</option>`).join(``)}</select></label><label>الصنف<select name="itemId" required>${items.map(item=>`<option value="${esc(item.id)}">${esc(item.itemCode)} - ${esc(item.itemName)}</option>`).join(``)}</select></label><label>رصيد المندوب المرسل<input id="repTransferAvailableStock" readonly></label><label>الكمية<input name="quantity" type="number" min="0.001" step="0.001" required></label><label class="wide">ملاحظات<textarea name="notes" required></textarea></label><button class="btn primary" type="submit" ${reps.length < 2 || !items.length ? `disabled` : ``}>نقل البضاعة</button></form>`;
@@ -266,43 +267,42 @@ function bindWarehouseCount(root, items, user) {
 function bindLoading(root, items, warehouses, user) {
   const form = $(`#loadingForm`, root);
   if (!form) return;
-  const availableInput = $(`#loadingAvailableStock`, form);
-  const quantityInput = form.elements.quantity;
-  const refreshAvailable = () => {
-    const d = getFormData(form);
-    const item = items.find(row => row.id === d.itemId);
-    const available = number(item?.stock?.[mainWarehouse(warehouses)?.id]);
-    availableInput.value = available;
-    quantityInput.max = String(Math.max(0, available));
-    quantityInput.setCustomValidity(number(quantityInput.value) > available ? `الكمية المطلوبة أكبر من الرصيد المتاح.` : ``);
-  };
-  form.elements.itemId?.addEventListener(`change`, refreshAvailable);
-  quantityInput?.addEventListener(`input`, refreshAvailable);
-  refreshAvailable();
-  form.addEventListener(`submit`, async e => {
-    e.preventDefault();
-    const submitButton = e.submitter;
-    if (submitButton?.disabled || !form.reportValidity()) return;
-    const d = getFormData(form);
-    const q = number(d.quantity);
-    const item = items.find(row => row.id === d.itemId);
-    const source = mainWarehouse(warehouses);
-    if (!source) return toast(`المستودع الرئيسي غير موجود.`, `err`);
+  const rows=[...form.querySelectorAll(`[data-loading-item]`)];
+  form.addEventListener(`input`,event=>{
+    const input=event.target.closest(`.loading-quantity`);
+    if(!input) return;
+    const max=number(input.max);
+    input.setCustomValidity(number(input.value)>max?`الكمية المطلوبة أكبر من الرصيد المتاح.`:``);
+  });
+  form.addEventListener(`submit`, async event => {
+    event.preventDefault();
+    const submitButton=event.submitter;
+    if(submitButton?.disabled||!form.reportValidity()) return;
+    const d=getFormData(form);
+    const entries=rows.map(row=>({itemId:row.dataset.loadingItem,quantity:number(row.querySelector(`.loading-quantity`)?.value)})).filter(entry=>entry.quantity>0);
+    if(!entries.length) return toast(`أدخل كمية لصنف واحد على الأقل`,`err`);
+    const source=mainWarehouse(warehouses);
+    if(!source) return toast(`المستودع الرئيسي غير موجود.`,`err`);
     let vehicle;
-    try { vehicle = requireVehicleWarehouse(d.repId, await erp.userDirectory(), warehouses).warehouse; }
-    catch (error) { return toast(error.message, `err`); }
-    const available = number(item?.stock?.[source.id]);
-    if (q > available + 0.0001) return toast(`لا يمكن تحميل ${item?.itemName || `الصنف`}. الرصيد المتاح ${available} فقط.`, `err`);
-    try {
-      if (submitButton) submitButton.disabled = true;
-      await erp.transferStock(d.itemId, source.id, vehicle.id, q, `تحميل المندوب`, { type:`vehicle_load`, date:d.date, repId:d.repId, documentNumber:d.loadingNumber, notes:d.notes });
-      toast(`تم اعتماد التحميل من المستودع الرئيسي إلى المندوب`);
-      await renderWarehouse(root, user);
-    } catch (error) {
-      console.error(`تعذر تحميل السيارة.`, error);
-      toast(error.message || `تعذر تحميل السيارة`, `err`);
-    } finally {
-      if (submitButton?.isConnected) submitButton.disabled = false;
+    try{ vehicle=requireVehicleWarehouse(d.repId,await erp.userDirectory(),warehouses).warehouse; }
+    catch(error){ return toast(error.message,`err`); }
+    try{
+      for(const entry of entries){
+        const item=items.find(row=>row.id===entry.itemId);
+        const available=number(item?.stock?.[source.id]);
+        if(entry.quantity>available+0.0001) throw new Error(`لا يمكن تحميل ${item?.itemName||`الصنف`}. الرصيد المتاح ${available} فقط.`);
+      }
+      if(submitButton) submitButton.disabled=true;
+      for(const entry of entries){
+        await erp.transferStock(entry.itemId,source.id,vehicle.id,entry.quantity,`تحميل المندوب`,{type:`vehicle_load`,date:d.date,repId:d.repId,documentNumber:d.loadingNumber,notes:d.notes});
+      }
+      toast(`تم تحميل ${entries.length} صنفاً للمندوب`);
+      await renderWarehouse(root,user);
+    }catch(error){
+      console.error(`تعذر تحميل السيارة.`,error);
+      toast(error.message||`تعذر تحميل السيارة`,`err`);
+    }finally{
+      if(submitButton?.isConnected) submitButton.disabled=false;
     }
   });
 }
