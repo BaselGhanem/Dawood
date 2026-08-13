@@ -61,7 +61,7 @@ function customerForm(reps, user){
   const financialFields = isRep
     ? `<input type="hidden" name="openingBalance" value="0"><input type="hidden" name="status" value="active">`
     : `<label>رصيد افتتاحي<input name="openingBalance" type="number" step="0.001" value="0"></label><label>الحالة<select name="status"><option value="active">فعال</option><option value="inactive">غير فعال</option></select></label>`;
-  return `<form id="customerForm" class="form-grid"><label>اسم العميل<input name="customerName" required autocomplete="off"></label><label>الهاتف<input name="phone" inputmode="tel" dir="ltr" style="text-align:left"></label><label>المنطقة<input name="area"></label>${repField}${financialFields}<div id="customerSimilarBox" class="hint wide">اكتب اسم العميل، وسيظهر هنا أي اسم مشابه موجود مسبقاً.</div><label class="wide">ملاحظات<textarea name="notes"></textarea></label></form>`;
+  return `<form id="customerForm" class="form-grid"><label>اسم العميل<input name="customerName" required autocomplete="off"></label><label>الهاتف<input name="phone" type="tel" inputmode="tel" dir="ltr" style="text-align:left" required autocomplete="tel"></label><label>المنطقة<input name="area"></label>${repField}${financialFields}<div id="customerSimilarBox" class="hint wide">اكتب اسم العميل، وسيظهر هنا أي اسم مشابه موجود مسبقاً.</div><label class="wide">ملاحظات<textarea name="notes"></textarea></label></form>`;
 }
 
 function bindInvoice(root, items, customers, reps, user){
@@ -131,7 +131,7 @@ function bindCustomers(root,reps,user, ctx){
   root.addEventListener(`click`,async e=>{
     if(e.target.closest(`#newCustomerBtn`)){
       const {modal}=await import('./utils.js');
-      const wrap = modal(`إضافة عميل`,customerForm(reps,user),[{label:`حفظ`,className:`primary`,handler:async wrap=>{const f=$(`#customerForm`,wrap); if(!f.reportValidity()) return; const d=getFormData(f); if(user.role===`sales_rep`){ d.responsibleRepId=user.id; d.openingBalance=0; d.status=`active`; } const similar=findSimilarCustomers(ctx.allCustomers || ctx.customers || [], d.customerName, d.phone); if(similar.length) toast(`تنبيه: يوجد ${similar.length} عميل مشابه. تأكد قبل الحفظ.`,`warn`); await erp.add(`customers`,{...d,openingBalance:number(d.openingBalance),currentBalance:number(d.openingBalance)}); wrap.remove(); toast(`تم حفظ العميل`); location.reload();}}]);
+      const wrap = modal(`إضافة عميل`,customerForm(reps,user),[{label:`حفظ`,className:`primary`,handler:async wrap=>{const f=$(`#customerForm`,wrap); if(!f.reportValidity()) return; const d=getFormData(f); d.phone=String(d.phone||``).trim(); if(!d.phone) return toast(`رقم الهاتف مطلوب`,`err`); if(user.role===`sales_rep`){ d.responsibleRepId=user.id; d.openingBalance=0; d.status=`active`; } const similar=findSimilarCustomers(ctx.allCustomers || ctx.customers || [], d.customerName, d.phone); if(similar.length) toast(`تنبيه: يوجد ${similar.length} عميل مشابه. تأكد قبل الحفظ.`,`warn`); await erp.add(`customers`,{...d,openingBalance:number(d.openingBalance),currentBalance:number(d.openingBalance)}); wrap.remove(); toast(`تم حفظ العميل`); location.reload();}}]);
       bindSimilarCustomerWarning(wrap, ctx.allCustomers || ctx.customers || []);
     }
     const statement=e.target.closest(`[data-customer-statement]`); if(statement) printCustomerStatement(statement.dataset.customerStatement, ctx);
