@@ -47,21 +47,21 @@ service cloud.firestore {
     match /loginAliases/{username} {
       allow read: if true;
       allow create, update: if isSuperuser();
-      allow delete: if false;
+      allow delete: if isSuperuser();
     }
 
     match /userDirectory/{userId} {
       allow read: if isActive();
       allow create: if isSuperuser() || safeOwnDirectoryCreate(userId);
       allow update: if isSuperuser() || safeOwnDirectoryUpdate(userId);
-      allow delete: if false;
+      allow delete: if isSuperuser();
     }
 
     match /users/{userId} {
       allow read: if canViewAll() || isFinance() || ownsUser(userId) || ownEmail();
       allow create: if isSuperuser();
       allow update: if isSuperuser() || safeOwnLoginPatch(userId) || safeFinancialPatch();
-      allow delete: if false;
+      allow delete: if isSuperuser();
     }
     match /settings/{docId} { allow read: if signedIn(); allow write: if isSuperuser(); }
     match /roles/{docId} { allow read: if signedIn(); allow write: if isSuperuser(); }
@@ -80,7 +80,7 @@ service cloud.firestore {
     match /manufacturingRecipes/{docId} { allow read: if isActive(); allow write: if isSuperuser() || role() == 'manufacturing_manager'; allow delete: if false; }
     match /productionOrders/{docId} { allow read: if isActive(); allow create, update: if isSuperuser() || role() == 'manufacturing_manager'; allow delete: if false; }
 
-    match /customers/{docId} { allow read: if isSales() || isFinance() || isGeneralManager(); allow create: if isSuperuser() || (role() == 'sales_rep' && request.resource.data.responsibleRepId == request.auth.uid && request.resource.data.status == 'active'); allow update: if isSuperuser() || ((isSales() || isFinance()) && affectedOnly(['currentBalance','updatedAt','updatedBy'])); allow delete: if false; }
+    match /customers/{docId} { allow read: if isSales() || isFinance() || isGeneralManager(); allow create: if isSuperuser() || (role() == 'sales_rep' && request.resource.data.responsibleRepId == request.auth.uid && request.resource.data.status == 'active'); allow update: if isSuperuser() || ((isSales() || isFinance()) && affectedOnly(['currentBalance','updatedAt','updatedBy'])); allow delete: if isSuperuser(); }
     match /salesInvoices/{docId} { allow read: if isSales() || isFinance() || isGeneralManager(); allow create, update: if isSales() || isSuperuser(); allow delete: if false; }
     match /customerDebts/{docId} { allow read: if isSales() || isFinance() || isGeneralManager(); allow create, update: if isSales() || isFinance(); allow delete: if false; }
     match /collections/{docId} { allow read: if isSales() || isFinance() || isGeneralManager(); allow create, update: if isSales() || isFinance(); allow delete: if false; }
