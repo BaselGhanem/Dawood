@@ -280,3 +280,111 @@ export function lineBuilder(container, itemOptions, onChange) {
   render();
   return { get lines(){ return [...state]; }, setLines(lines){ state.splice(0, state.length, ...lines); render(); } };
 }
+
+
+export function searchableAutocomplete(input, options, config = {}) {
+  if (!input) return { clear() {}, selected: () => null };
+  const getLabel = config.getLabel || (option => option?.label || option?.name || String(option || ``));
+  const getValue = config.getValue || (option => option?.id || String(option || ``));
+  const wrapper = input.closest(`.autocomplete-field`) || input.parentElement;
+  wrapper.classList.add(`autocomplete-field`);
+  input.setAttribute(`autocomplete`, `off`);
+  input.setAttribute(`role`, `combobox`);
+  input.setAttribute(`aria-autocomplete`, `list`);
+  input.setAttribute(`aria-expanded`, `false`);
+  const panel = document.createElement(`div`);
+  panel.className = `autocomplete-panel`;
+  panel.setAttribute(`role`, `listbox`);
+  wrapper.appendChild(panel);
+  let selected = null;
+  let filtered = [];
+  let activeIndex = -1;
+  let closeTimer = null;
+
+  const matchHtml = (label, queryText) => {
+    const cleanQuery = String(queryText || ``).trim();
+    if (!cleanQuery) return esc(label);
+    const lowerLabel = String(label).toLocaleLowerCase();
+    const lowerQuery = cleanQuery.toLocaleLowerCase();
+    const index = lowerLabel.indexOf(lowerQuery);
+    if (index < 0) return esc(label);
+    return `${esc(String(label).slice(0,index))}<mark>${esc(String(label).slice(index,index+cleanQuery.length))}</mark>${esc(String(label).slice(index+cleanQuery.length))}`;
+  };
+  const close = () => {
+    panel.classList.remove(`open`);
+    input.setAttribute(`aria-expanded`, `false`);
+    activeIndex = -1;
+  };
+  const render = () => {
+    const queryText = input.value.trim().toLocaleLowerCase();
+    filtered = options.filter(option => getLabel(option).toLocaleLowerCase().includes(queryText));
+    panel.innerHTML = filtered.length
+      ? filtered.map((option,index)=>`<button type="button" class="autocomplete-option ${index===activeIndex?`active`:``}" data-autocomplete-index="${index}" role="option" aria-selected="${index===activeIndex}">${matchHtml(getLabel(option),input.value)}</button>`).join(``)
+      : `<div class="autocomplete-empty">${esc(config.emptyMessage || `لا توجد نتائج`)}</div>`;
+    panel.classList.add(`open`);
+    input.setAttribute(`aria-expanded`, `true`);
+    panel.querySelector(`.autocomplete-option.active`)?.scrollIntoView({block:`nearest`});
+  };
+  const choose = option => {
+    selected = option;
+    input.value = getLabel(option);
+    input.dataset.selectedValue = getValue(option);
+    input.setCustomValidity(``);
+    config.onSelect?.(option);
+    close();
+  };
+  input.addEventListener(`focus`, () => {
+    clearTimeout(closeTimer);
+    selected = options.find(option => getValue(option) === input.dataset.selectedValue) || selected;
+    render();
+  });
+  input.addEventListener(`input`, () => {
+    selected = null;
+    delete input.dataset.selectedValue;
+    input.setCustomValidity(config.invalidMessage || `القيمة غير موجودة`);
+    config.onClear?.();
+    activeIndex = -1;
+    render();
+  });
+  input.addEventListener(`keydown`, event => {
+    if (event.key === `ArrowDown` || event.key === `ArrowUp`) {
+      event.preventDefault();
+      if (!panel.classList.contains(`open`)) render();
+      if (!filtered.length) return;
+      activeIndex = event.key === `ArrowDown`
+        ? (activeIndex + 1) % filtered.length
+        : (activeIndex - 1 + filtered.length) % filtered.length;
+      render();
+    } else if (event.key === `Enter` && panel.classList.contains(`open`)) {
+      if (activeIndex < 0 && filtered.length === 1) activeIndex = 0;
+      if (activeIndex >= 0) { event.preventDefault(); choose(filtered[activeIndex]); }
+    } else if (event.key === `Escape`) close();
+  });
+  panel.addEventListener(`mousedown`, event => {
+    event.preventDefault();
+    const optionButton = event.target.closest(`[data-autocomplete-index]`);
+    if (optionButton) choose(filtered[number(optionButton.dataset.autocompleteIndex)]);
+  });
+  input.addEventListener(`blur`, () => {
+    closeTimer = setTimeout(() => {
+      close();
+      if (!selected && input.value.trim()) {
+        input.setCustomValidity(config.invalidMessage || `القيمة غير موجودة`);
+        toast(config.invalidMessage || `القيمة غير موجودة`, `err`);
+      } else if (!selected && input.required) {
+        input.setCustomValidity(config.requiredMessage || config.invalidMessage || `هذا الحقل مطلوب`);
+      }
+    }, 120);
+  });
+  return {
+    clear() {
+      selected = null;
+      input.value = ``;
+      delete input.dataset.selectedValue;
+      input.setCustomValidity(input.required ? (config.requiredMessage || config.invalidMessage || `هذا الحقل مطلوب`) : ``);
+      config.onClear?.();
+      close();
+    },
+    selected: () => selected
+  };
+}
