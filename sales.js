@@ -1,5 +1,5 @@
 import { erp } from './firebase.js';
-import { $, esc, money, qty, number, uid, todayISO, getFormData, toast, confirmModal, table, statusBadge, lineBuilder, exportExcel, renderTabs, attachTabs, printHtmlPdf, normalize } from './utils.js';
+import { $, esc, money, qty, number, uid, todayISO, getFormData, toast, confirmModal, table, statusBadge, lineBuilder, exportExcel, renderTabs, attachTabs, printHtmlPdf, normalize, searchableAutocomplete } from './utils.js';
 
 export async function renderSales(root, user) {
   const isRep = user.role === `sales_rep`;
@@ -41,8 +41,8 @@ function invoicePanel(customers, reps, user){
   return `${missingHint}<div class="hint">${cashOnly ? `واجهة المندوب مختصرة للبيع النقدي فقط.` : `يمكن للـ Superuser تسجيل النقدي أو الآجل.`}</div><form id="salesForm" class="form-grid">
     <label>رقم الفاتورة<input name="invoiceNumber" value="${uid(`SAL`)}" readonly></label>
     <label>التاريخ<input name="date" type="date" value="${todayISO()}"></label>
-    <label>البائع<select name="sellerId" required>${sellers.map(r=>`<option value="${esc(r.id)}" ${user.id===r.id?`selected`:``}>${esc(r.fullName)}</option>`).join(``)}</select></label>
-    <label>العميل<select name="customerId" required>${customers.map(c=>`<option value="${esc(c.id)}">${esc(c.customerName)}</option>`).join(``)}</select></label>
+    ${cashOnly ? `<input type="hidden" name="sellerId" value="${esc(user.id)}">` : `<label>البائع<select name="sellerId" required>${sellers.map(r=>`<option value="${esc(r.id)}" ${user.id===r.id?`selected`:``}>${esc(r.fullName)}</option>`).join(``)}</select></label>`}
+    <label class="autocomplete-field">العميل<input id="salesCustomerSearch" type="search" required placeholder="ابحث عن العميل بالاسم أو الهاتف"><input type="hidden" name="customerId"></label>
     <label>نوع البيع<select name="saleType" ${cashOnly?`disabled`:``}><option value="cash">نقدي</option><option value="credit">ذمم / آجل</option></select></label>
     <label>المبلغ المدفوع<input name="paidAmount" type="number" min="0" step="0.001" value="0"></label>
     <label>تاريخ الاستحقاق<input name="dueDate" type="date" ${cashOnly?`disabled`:``}></label>
@@ -61,11 +61,22 @@ function customerForm(reps, user){
   const financialFields = isRep
     ? `<input type="hidden" name="openingBalance" value="0"><input type="hidden" name="status" value="active">`
     : `<label>رصيد افتتاحي<input name="openingBalance" type="number" step="0.001" value="0"></label><label>الحالة<select name="status"><option value="active">فعال</option><option value="inactive">غير فعال</option></select></label>`;
-  return `<form id="customerForm" class="form-grid"><label>اسم العميل<input name="customerName" required autocomplete="off"></label><label>الهاتف<input name="phone" type="tel" inputmode="tel" dir="ltr" style="text-align:left" required autocomplete="tel"></label><label>المنطقة<input name="area"></label>${repField}${financialFields}<div id="customerSimilarBox" class="hint wide">اكتب اسم العميل، وسيظهر هنا أي اسم مشابه موجود مسبقاً.</div><label class="wide">ملاحظات<textarea name="notes"></textarea></label></form>`;
+  return `<form id="customerForm" class="form-grid"><label>اسم العميل<input name="customerName" required autocomplete="off"></label><label>الهاتف<input name="phone" type="tel" inputmode="numeric" dir="ltr" style="text-align:left" required autocomplete="tel" minlength="10" maxlength="10" pattern="07[789][0-9]{7}" title="يجب أن يتكون الرقم من 10 أرقام ويبدأ بـ 077 أو 078 أو 079" placeholder="07XXXXXXXX"></label><label>المنطقة<input name="area"></label>${repField}${financialFields}<div id="customerSimilarBox" class="hint wide">اكتب اسم العميل، وسيظهر هنا أي اسم مشابه موجود مسبقاً.</div><label class="wide">ملاحظات<textarea name="notes"></textarea></label></form>`;
 }
 
 function bindInvoice(root, items, customers, reps, user){
   let lines=[];
+  const salesForm=$(`#salesForm`,root);
+  const customerSearch=$(`#salesCustomerSearch`,salesForm);
+  const customerIdInput=salesForm?.elements.customerId;
+  searchableAutocomplete(customerSearch,customers,{
+    getLabel:customer=>`${customer.customerName || ``} · ${customer.phone || `بدون هاتف`}`,
+    getValue:customer=>customer.id,
+    invalidMessage:`عميل غير موجود`,
+    requiredMessage:`اختر العميل`,
+    onSelect:customer=>{ customerIdInput.value=customer.id; },
+    onClear:()=>{ customerIdInput.value=``; }
+  });
   const linesRoot=$(`#salesLines`,root);
   if(user.role===`sales_rep`){
     const warehouseId=user.assignedWarehouseId;
@@ -91,7 +102,7 @@ function bindInvoice(root, items, customers, reps, user){
   $(`#draftSaleBtn`,root)?.addEventListener(`click`,()=>saveSale(`draft`));
   async function saveSale(status){
     try {
-      const form=$(`#salesForm`,root); if(!form.reportValidity()) return; if(!lines.length) return toast(`أدخل صنفاً واحداً على الأقل`,`err`);
+      const form=$(`#salesForm`,root); if(!form.reportValidity()) return; const selectedCustomer=customers.find(row=>row.id===form.elements.customerId.value); if(!selectedCustomer) return toast(`عميل غير موجود`,`err`); if(!lines.length) return toast(`أدخل صنفاً واحداً على الأقل`,`err`);
       const itemIds=lines.map(line=>line.itemId);
       if(new Set(itemIds).size!==itemIds.length) throw new Error(`لا يمكن إضافة الصنف نفسه أكثر من مرة داخل الفاتورة.`);
     const d=getFormData(form); if(user.role===`sales_rep`) d.saleType=`cash`;
@@ -131,7 +142,7 @@ function bindCustomers(root,reps,user, ctx){
   root.addEventListener(`click`,async e=>{
     if(e.target.closest(`#newCustomerBtn`)){
       const {modal}=await import('./utils.js');
-      const wrap = modal(`إضافة عميل`,customerForm(reps,user),[{label:`حفظ`,className:`primary`,handler:async wrap=>{const f=$(`#customerForm`,wrap); if(!f.reportValidity()) return; const d=getFormData(f); d.phone=String(d.phone||``).trim(); if(!d.phone) return toast(`رقم الهاتف مطلوب`,`err`); if(user.role===`sales_rep`){ d.responsibleRepId=user.id; d.openingBalance=0; d.status=`active`; } const similar=findSimilarCustomers(ctx.allCustomers || ctx.customers || [], d.customerName, d.phone); if(similar.length) toast(`تنبيه: يوجد ${similar.length} عميل مشابه. تأكد قبل الحفظ.`,`warn`); await erp.add(`customers`,{...d,openingBalance:number(d.openingBalance),currentBalance:number(d.openingBalance)}); wrap.remove(); toast(`تم حفظ العميل`); location.reload();}}]);
+      const wrap = modal(`إضافة عميل`,customerForm(reps,user),[{label:`حفظ`,className:`primary`,handler:async wrap=>{const f=$(`#customerForm`,wrap); if(!f.reportValidity()) return; const d=getFormData(f); d.phone=String(d.phone||``).replace(/\D/g,``); if(!/^07[789]\d{7}$/.test(d.phone)) return toast(`رقم الهاتف يجب أن يكون 10 أرقام ويبدأ بـ 077 أو 078 أو 079`,`err`); if(user.role===`sales_rep`){ d.responsibleRepId=user.id; d.openingBalance=0; d.status=`active`; } const similar=findSimilarCustomers(ctx.allCustomers || ctx.customers || [], d.customerName, d.phone); if(similar.length) toast(`تنبيه: يوجد ${similar.length} عميل مشابه. تأكد قبل الحفظ.`,`warn`); await erp.add(`customers`,{...d,openingBalance:number(d.openingBalance),currentBalance:number(d.openingBalance)}); wrap.remove(); toast(`تم حفظ العميل`); location.reload();}}]);
       bindSimilarCustomerWarning(wrap, ctx.allCustomers || ctx.customers || []);
     }
     const statement=e.target.closest(`[data-customer-statement]`); if(statement) printCustomerStatement(statement.dataset.customerStatement, ctx);
